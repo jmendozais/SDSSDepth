@@ -11,7 +11,7 @@ def l1(x, y):
 dis_f = {}
 dis_f['l1'] = l1
 
-def joint_rec(imgs, recs, dissimilarity='l1', mode='min'):
+def joint_rec(imgs, recs, dissimilarity='l1', mode='min', return_residuals=False):
     '''
     Args:
       imgs: is a list a batch at multiple scales. Each element of the batch is a target image repeated num_source * 2 times, to consider all of the possible reconstructions using the rigid and dynamic flows. [s,b,num_src,3,h,w]
@@ -21,20 +21,29 @@ def joint_rec(imgs, recs, dissimilarity='l1', mode='min'):
     assert mode == 'min'
 
     num_scales = len(imgs)
-    p = dis_f[dissimilarity]
+    rho = dis_f[dissimilarity]
 
     total_loss = 0
     # TODO: set weights
+
+    res_vec = []
+    min_res_vec = []
     for i in range(num_scales):
         batch_size, num_recs, c, h, w = imgs[i].size()
-        dis = p(imgs[i].view(-1, c, h, w), recs[i].view(-1, c, h, w))
-        dis = dis.view(batch_size, num_recs, h, w)
-        dis, idx = torch.min(dis, dim=1)
+        res = rho(imgs[i].view(-1, c, h, w), recs[i].view(-1, c, h, w))
+        res = res.view(batch_size, num_recs, h, w)
+        min_res, idx = torch.min(res, dim=1)
 
         # coarser scales have lower weights (inspired by DispNet)
-        total_loss += (1/(2**i)) * torch.mean(dis)
+        total_loss += (1/(2**i)) * torch.mean(min_res)
+        if return_residuals:
+            res_vec.append(res)
+            min_res_vec.append(min_res)
 
-    return total_loss
+    if return_residuals:
+        return total_loss, res_vec, min_res_vec
+    else:
+        return total_loss
 
 def _gradient_x(img):
     img = F.pad(img, (0,0,0,1), mode='reflect') # todo check the effect of padding on continuity

@@ -38,7 +38,7 @@ class Kitti(Dataset):
 
 
 if __name__ == "__main__":
-    dataset = Kitti('/home/Datasets/kitti/raw_data/', 'train.txt', height=120, width=360, num_scales=4)
+    dataset = Kitti('/data/ra153646/dataset/KITTI/raw_data/', 'kitti/train.txt', height=120, width=360, num_scales=4)
 
     for i in range(1000):
         snippet = dataset[i]

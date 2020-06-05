@@ -1,12 +1,14 @@
 import torch
 import torch.utils.data as data
 import os
+import time
 import glob
 import numpy as np
 import numpy.random as rng
 from skimage import io, transform
 from torchvision.transforms import functional as func
 from PIL import Image
+import cv2
 
 '''
 A dataset is compose of a set of clips. For each clip there is a directory that contains its frames.
@@ -81,9 +83,16 @@ class Dataset(data.Dataset):
         """
 
         # Load image neighborhood
+        #start = time.perf_counter()
         index = self.valid_idxs[index]
-
-        target = Image.open(self.filenames[index])
+        
+        #acc = 0
+        #start_all = time.perf_counter()
+        #start = start_all
+        target = cv2.imread(self.filenames[index])
+        #acc += time.perf_counter() - start
+        target = cv2.cvtColor(target, cv2.COLOR_BGR2RGB)
+        target = Image.fromarray(target)
         target = target.resize((self.width, self.height), resample=2)
 
         #print('----------')
@@ -91,11 +100,18 @@ class Dataset(data.Dataset):
 
         sources = []
         for offset in self.offsets:
-            source = Image.open(self.filenames[index + offset])
-            #print(self.filenames[index + offset])
+            #start = time.perf_counter()
+            source = cv2.imread(self.filenames[index + offset])
+            #acc += time.perf_counter() - start
+            source = cv2.cvtColor(source, cv2.COLOR_BGR2RGB)
+            source = Image.fromarray(source)
             source = source.resize((self.width, self.height), resample=2)
             sources.append(source)
+
+        #print(time.perf_counter() - start_all, acc)
         snippet = [target] + sources
+
+        #print('loading', time.perf_counter() - start)
 
         # Perform data augmentation (color, flip, scale crop))
         if self.is_training:

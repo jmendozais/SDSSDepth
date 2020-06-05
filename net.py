@@ -174,10 +174,10 @@ class CustomDecoder(nn.Module):
         self.scales = scales
         self.num_scales = len(scales)
 
-        self.blocks = []
+        self.blocks = nn.ModuleList()
 
         for i in range(self.num_scales + 1):
-            self.blocks.append({})
+            self.blocks.append(nn.ModuleDict())
 
             in_ch = self.num_ch_skipt[-1] if i == 0 else self.num_ch_dec[i - 1]
             out_ch = self.num_ch_dec[i]
@@ -269,7 +269,7 @@ class IntrinsicsDecoder(nn.Module):
           a tensor with the intrinsic parameters (fx, fy) of shape [b,2,1,1]
         '''
         intr = self.model(inputs)
-        ones = torch.ones_like(intr).to('cpu')
+        ones = torch.ones_like(intr).to(inputs.device)
         diag_flat = torch.cat([intr, ones], axis=1)
 
         K = torch.diag_embed(torch.squeeze(diag_flat))
@@ -304,11 +304,10 @@ class PoseDecoder(nn.Module):
         T = torch.cat([R, t], axis=2)
         last_row = torch.zeros((batch_size * self.num_src, 1, 4))
         last_row[:,0,3] = torch.ones((1,))
-        last_row = last_row.to('cpu')
+        last_row = last_row.to(inputs.device)
 
         #tmp = torch.eye(4)
         #tmp = tmp.unsqueeze(0).expand(batch_size * self.num_src, 4, 4)
-
         return torch.cat([T, last_row], axis=1)
          
 

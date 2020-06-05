@@ -28,7 +28,7 @@ class BackprojectDepth(nn.Module):
         self.coords = torch.from_numpy(coords)
         self.coords = torch.unsqueeze(self.coords, 0)
         self.coords = self.coords.repeat(self.batch_size, 1, 1)
-        self.ones = nn.Parameter(torch.ones(self.batch_size, 1, self.height * self.width, requires_grad=False))
+        self.ones = nn.Parameter(torch.ones(self.batch_size, 1, self.height * self.width), requires_grad=False)
         self.coords = torch.cat([self.coords, self.ones], 1)
 
         # dims [b, 3, w*h], coords[:,0,i] in [0, w) , coords[:,1,i] in [0, h)
@@ -37,7 +37,11 @@ class BackprojectDepth(nn.Module):
     def forward(self, depth, inv_K):
         cam_coords = torch.matmul(inv_K[:,:3,:3], self.coords)
         cam_coords = depth.view(self.batch_size, 1, -1) * cam_coords
-        cam_coords = torch.cat([cam_coords, self.ones], 1)
+
+        try:
+            cam_coords = torch.cat([cam_coords, self.ones], 1)
+        except RuntimeError:
+            print('RE catched, devices (cam_coords, ones): ', cam_coords.device, self.ones.device)
 
         return cam_coords
 
@@ -87,8 +91,8 @@ class Model(nn.Module):
         self.depth_net = DepthNet(False)
         self.motion_net = MotionNet(self.motion_seq_len, self.width, self.height)
 
-        self.ms_backproject = []
-        self.ms_applyflow = []
+        self.ms_backproject = nn.ModuleList()
+        self.ms_applyflow = nn.ModuleList()
         for i in range(self.num_scales):
             height_i = self.height//(2**i)
             width_i = self.width//(2**i)
@@ -105,8 +109,12 @@ class Model(nn.Module):
 
         Returns:
           tgt_img_pyt: a list of tensors. Each tensor has batch of target images repeated by the number of source frame considered, duplicated to consider rigid and optical flow based reconstruction. Each tensor has a shape [b, 2*num_src, 3, h, w].
+
+          tgt_rec_pyr: [b, 2*num_src, c, h, w]
+
           tgt_depth_pyr: a list of tensors. Each tensor has a batch of depth maps of shape [b, 1, h, w] 
-          of_pyr: a list of tensors. Each tensor has a batch of optical flows for each target, source image pair. The flows are stacked around the channel dimmension. It has a shape [b, 2*num_src, h, w]
+
+          of_pyr: a list of tensors. Each tensor has a batch of optical flows for each target, source image pair. The flows are stacked around the channel dimmension. It has a shape [b*num_src, 2, h, w]
           
           (Deprecated) a list of tensors with the batch of warped outputs at multiple scales. Each tensor has a shape of [2 * b * num_sources, c, h_i, w_i] with the rigid reconstructions from [0..b) and the flow reconstructions from [b..2b)
         '''
@@ -114,9 +122,6 @@ class Model(nn.Module):
         # send all elements to devide
         batch_size = len(inputs[0]) # train/test bs may differ
         
-        for i in range(self.num_scales):
-            inputs[i] = inputs[i].to('cpu')         
-
         # compute depth
         tgt_imgs = inputs[0][:,0]
 
@@ -126,6 +131,7 @@ class Model(nn.Module):
         for i in range(self.num_scales):
             tgt_depth_pyr.append(1.0/(MIN_INV_DEPTH + tgt_inv_depth_pyr[i]))
         '''
+
         tgt_depth_pyr = self.depth_net(tgt_imgs)
 
         # compute flow, pose and intrinsics
