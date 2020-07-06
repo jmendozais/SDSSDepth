@@ -7,8 +7,13 @@ import numpy as np
 import numpy.random as rng
 from skimage import io, transform
 from torchvision.transforms import functional as func
+
 from PIL import Image
 import cv2
+from turbojpeg import TurboJPEG as JPEG
+
+from util import any_nan
+#from memory_profiler import profile
 
 '''
 A dataset is compose of a set of clips. For each clip there is a directory that contains its frames.
@@ -32,6 +37,7 @@ class Dataset(data.Dataset):
             num_scales=4,
             seq_len=3,
             is_training=True,
+            load_depth=False
             ):
 
         self.data_dir = data_dir
@@ -41,6 +47,7 @@ class Dataset(data.Dataset):
         self.width = width
         self.num_scales = num_scales
         self.is_training = is_training
+        self.load_depth = load_depth
         
         frames = open(frames_file)
         frames = list(frames.readlines()) 
@@ -62,6 +69,7 @@ class Dataset(data.Dataset):
             if len(frame_paths) >= self.seq_len:
                 self.valid_idxs += list(range(len(self.filenames) + offset, len(self.filenames) + len(frame_paths) - offset))
                 self.filenames += frame_paths
+        self.filenames = np.array(self.filenames, dtype=np.string_)
 
         self.offsets = [i for i in range(-offset, 0)]
         self.offsets += [i for i in range(1, offset + 1)]
@@ -72,6 +80,10 @@ class Dataset(data.Dataset):
         self.saturation = (0.8, 1.2) #0.2
         self.hue = (-0.1, 0.1) #0.1
 
+        self.reader = JPEG()
+
+
+    #@profile
     def __getitem__(self, index):
 
         """
@@ -80,35 +92,48 @@ class Dataset(data.Dataset):
         Returns:
             A list of tensors. Each tensor in the list represents an image snippet (the first element is the target frame, then the source frames) at certain scale. The tensor i has a shape (seq_len, channels, height/2**i, widht/2**i)
             target and source frames at multiple scales.
+
+        TODO: 3 process running at same time give Out of memory error on fork. This may happen because each worker uses to much memory. Try reducing RAM usage (call gc explicitly, do not use float tensors, use int8 or int16)
         """
 
         # Load image neighborhood
         #start = time.perf_counter()
         index = self.valid_idxs[index]
         
-        #acc = 0
-        #start_all = time.perf_counter()
-        #start = start_all
-        target = cv2.imread(self.filenames[index])
-        #acc += time.perf_counter() - start
-        target = cv2.cvtColor(target, cv2.COLOR_BGR2RGB)
+        start_all = time.perf_counter()
+        start = start_all
+
+        # OpenCV mode
+        #target = cv2.imread(self.filenames[index])
+        #target = cv2.cvtColor(target, cv2.COLOR_BGR2RGB)
+        #print("opencv", target.shape, target[:,:,0].mean())
+
+        with open(self.filenames[index], 'rb') as f:
+            target = self.reader.decode(f.read(), pixel_format=0)
+
+        read_acc = time.perf_counter() - start
+
         target = Image.fromarray(target)
-        target = target.resize((self.width, self.height), resample=2)
+        target = target.resize((self.width, self.height), resample=Image.BILINEAR)
 
         #print('----------')
         #print(self.filenames[index])
 
         sources = []
         for offset in self.offsets:
-            #start = time.perf_counter()
-            source = cv2.imread(self.filenames[index + offset])
-            #acc += time.perf_counter() - start
-            source = cv2.cvtColor(source, cv2.COLOR_BGR2RGB)
+            start = time.perf_counter()
+            #source = cv2.imread(self.filenames[index + offset])
+            #source = cv2.cvtColor(source, cv2.COLOR_BGR2RGB)
+            with open(self.filenames[index + offset], 'rb') as f:
+                source = self.reader.decode(f.read(), pixel_format=0)
+
+            read_acc += time.perf_counter() - start
             source = Image.fromarray(source)
-            source = source.resize((self.width, self.height), resample=2)
+            source = source.resize((self.width, self.height), resample=Image.BILINEAR)
             sources.append(source)
 
-        #print(time.perf_counter() - start_all, acc)
+        load_time = time.perf_counter() - start_all
+
         snippet = [target] + sources
 
         #print('loading', time.perf_counter() - start)
@@ -151,20 +176,44 @@ class Dataset(data.Dataset):
                 scaled_snippet.append(func.to_tensor(tmp))
 
             scaled_snippet = torch.stack(scaled_snippet) 
+            assert not any_nan(scaled_snippet)
             ms_snippet[i] = scaled_snippet
 
         for i in range(len(snippet)):
             snippet[i] = func.to_tensor(snippet[i]) 
         ms_snippet[0] = torch.stack(snippet)
 
+        # Load depth
+        if self.load_depth:
+            depth = self.get_depth(index)
+            depth = cv2.resize(depth, (1242, 375), interpolation=cv2.INTER_NEAREST)
+            depth = np.expand_dims(depth, axis=2) 
+            depth = func.to_tensor(depth)
+
+            assert not any_nan(depth)
+
+            ms_snippet[-1] = depth
+        
+        total_time = time.perf_counter() - start_all
+        #print("read {:.4f} ({:.2f}%), read + resize: {:.4f} ({:.2f}), getittem {:.4f}".format(read_acc, read_acc/total_time, load_time, load_time/total_time, total_time))
         return ms_snippet
+
+    def get_depth(self, idx):
+        raise NotImplementedError()
 
     def __len__(self):
         return len(self.valid_idxs)
 
 if __name__ == "__main__":
-    dataset = Dataset('moving_exp/sample/ytwalking_frames', 'moving_exp/sample/ytwalking_frames/ytwalking.txt', height=120, width=360, num_scales=4)
-    for i in range(6030, 6040):
-        snippet = dataset[i]
+    dataset = Dataset('/data/ra153646/datasets/KITTI/raw_data', 'data/kitti/train.txt', height=128, width=416, num_scales=4, seq_len=3, is_training=True)
+    #create_db(dataset.filenames, "/data/ra153646/datasets/KITTI/raw_data_jpeg.lmdb")
 
-    print(len(snippet))
+    loader = torch.utils.data.DataLoader(dataset, batch_size=12, shuffle=True, num_workers=8, pin_memory=True, drop_last=True)
+	
+    start = time.perf_counter()
+    for i, data in enumerate(loader, 0):
+        if i > 15:
+            break
+
+    print("final time: {:.4}".format(time.perf_counter() - start))
+

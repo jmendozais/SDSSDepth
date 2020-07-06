@@ -1,0 +1,8 @@
+youtube-dl
+torch==1.5.1
+torchvision==0.6.1
+pytorch3d
+dill
+tensorboardX
+pyturbojpeg
+efficientnet-pytorch

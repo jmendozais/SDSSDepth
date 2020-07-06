@@ -19,10 +19,13 @@ from efficientnet_pytorch.utils import (
     MemoryEfficientSwish,
 )
 
+from util import any_nan
+
 class MultiInputEfficientNet(EfficientNet):
 
     def __init__(self, blocks_args=None, global_params=None):
         super(MultiInputEfficientNet, self).__init__(blocks_args, global_params)
+
     def extract_features(self, inputs):
         """use convolution layer to extract feature .
 
@@ -56,7 +59,7 @@ class MultiInputEfficientNet(EfficientNet):
             inputs (tensor): Input tensor.
 
         Returns:
-            Output a subset of feature maps. There is a feature maps for each scale.
+            Output a subset of feature maps. There is a feature map for each scale.
         """
         all_feats = self.extract_features(inputs)
         idx = [1, 3, 5, 11, 17]
@@ -86,22 +89,17 @@ class MultiInputEfficientNet(EfficientNet):
             with torch.no_grad():
                 model._conv_stem.weight.copy_(torch.cat([tmp]*num_inputs, 1)/2)
 
-
         return model
 
 class MultiInputResNet(models.ResNet):
-    '''
-    Adapted from monodepth2
-    '''
-
     def __init__(self, block, layers, num_classes=1000, num_inputs=1):
         super(MultiInputResNet, self).__init__(block, layers)
         self.inplanes = 64
         self.conv1 = nn.Conv2d(num_inputs * 3, 64, kernel_size=7, stride=2, padding=3, bias=False) # Why bias=False?
         self.bn1 = nn.BatchNorm2d(64) # TODO: Check if BN updates its mean, var on testing..
         self.relu = nn.ReLU(inplace=True)
+        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
 
-        #print('expansion ', block.expansion, ' planes ', )
         self.layer1 = self._make_layer(block, 64, layers[0]) 
         self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
         self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
@@ -114,19 +112,19 @@ class MultiInputResNet(models.ResNet):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
 
-def multiinput_resnet18(num_inputs=1, pretrained=False):
-    blocks = [2, 2, 2, 2]
-    block_type = models.resnet.BasicBlock
-    model = MultiInputResNet(block_type, blocks, num_inputs=num_inputs)
+    @classmethod
+    def from_pretrained(num_inputs=1, pretrained=False):
+        blocks = [2, 2, 2, 2]
+        block_type = models.resnet.BasicBlock
+        model = MultiInputResNet(block_type, blocks, num_inputs=num_inputs)
 
-    # TODO: Put load_state_dict and forward in MultiInputResnet
-    if pretrained:
-        sdict = model_zoo.load_url(models.resnet.model_urls['resnet18'])
-        sdict['conv1.weight'] = torch.cat([sdict['conv1.weight']] * num_inputs, 1) / num_inputs
-        model.load_state_dict(sdict)
+        # TODO: Put load_state_dict and forward in MultiInputResnet
+        if pretrained:
+            sdict = model_zoo.load_url(models.resnet.model_urls['resnet18'])
+            sdict['conv1.weight'] = torch.cat([sdict['conv1.weight']] * num_inputs, 1) / num_inputs
+            model.load_state_dict(sdict)
 
-    return model
-
+        return model
 
 class MultiInputEfficientNetEncoder(nn.Module):
     def __init__(self, num_inputs=1, pretrained=False):
@@ -144,21 +142,21 @@ class MultiInputResNetEncoder(nn.Module):
     def __init__(self, num_inputs=1, pretrained=False):
         super(MultiInputResNetEncoder, self).__init__()
 
-        self.resnet = models.resnet18(pretrained) if num_inputs == 1 else multiinput_resnet18(num_inputs, pretrained)
+        self.net = models.resnet18(pretrained) if num_inputs == 1 else MultiInputResNet.from_pretrained(num_inputs, pretrained)
 
         self.num_ch_skipt = [64, 64, 128, 256, 512]
 
     def forward(self, x):
         self.feats = [] 
 
-        x = self.resnet.conv1(x) # TODO: Check why monodepth scale the inputs.
-        x = self.resnet.bn1(x)
+        x = self.net.conv1(x) # TODO: Check why monodepth scale the inputs.
+        x = self.net.bn1(x)
 
-        self.feats.append(self.resnet.relu(x)) # H/2xW/2
-        self.feats.append(self.resnet.layer1(self.resnet.maxpool(self.feats[-1]))) # H/4xW/4
-        self.feats.append(self.resnet.layer2(self.feats[-1])) # H/8xW/8
-        self.feats.append(self.resnet.layer3(self.feats[-1])) # H/16xW/16
-        self.feats.append(self.resnet.layer4(self.feats[-1])) # H/32xW/32
+        self.feats.append(self.net.relu(x)) # H/2xW/2
+        self.feats.append(self.net.layer1(self.net.maxpool(self.feats[-1]))) # H/4xW/4
+        self.feats.append(self.net.layer2(self.feats[-1])) # H/8xW/8
+        self.feats.append(self.net.layer3(self.feats[-1])) # H/16xW/16
+        self.feats.append(self.net.layer4(self.feats[-1])) # H/32xW/32
 
         return self.feats
 
@@ -203,7 +201,6 @@ class CustomDecoder(nn.Module):
                 tmp = []
                 tmp.append(nn.ReflectionPad2d(1))
                 tmp.append(nn.Conv2d(out_ch, self.num_ch_out, 3))
-                #tmp.append(nn.Softplus()) #nn.Sigmoid()) 
                 self.blocks[-1]['out'] = nn.Sequential(*tmp)
 
     def forward(self, feats):
@@ -233,7 +230,8 @@ class CustomDecoder(nn.Module):
 class DepthNet(nn.Module):
     def __init__(self, pretrained=True):
         super(DepthNet, self).__init__()
-        self.enc = MultiInputResNetEncoder(num_inputs=1, pretrained=pretrained)
+        #self.enc = MultiInputResNetEncoder(num_inputs=1, pretrained=pretrained)
+        self.enc = MultiInputEfficientNetEncoder(num_inputs=1, pretrained=pretrained)
         '''
         Activation functions and depth range. Current implementations use sigmoid activations and bound depth values in a range (i.e. monodepth2 0.1 - 100). 
         Activation scaling. Most depth estimation network scale the disp outputs by a factor (numerical stability)
@@ -243,11 +241,16 @@ class DepthNet(nn.Module):
 
     def forward(self, inputs):
         enc_feats = self.enc(inputs)
-        return self.dec(enc_feats)
+        depths = self.dec(enc_feats)
+
+        for i in range(len(depths)):
+            depths[i] = depths[i] + 1e-6 # TODO: check if it solves the NaN problem
+
+        return depths, enc_feats
 
 class IntrinsicsDecoder(nn.Module):
     '''
-    This decoder estimates the intrinsic parameters from the bottleneck features of the motion deocder. We estimate the focal distances (fx, fy) and assume the the principal point is located at the center of the image. TODO: For generalization, evaluate if its also required to estimate the principal point.
+    This decoder estimates the intrinsic parameters from the bottleneck features of the motion deocder. We estimate the focal distances (fx, fy) and assume the the principal point is located at the center of the image. TODO: For generalization on diverse cameras, evaluate if its also required to estimate the principal point.
     '''
     def __init__(self, height, width, num_in_ch):
         super(IntrinsicsDecoder, self).__init__()
@@ -257,7 +260,7 @@ class IntrinsicsDecoder(nn.Module):
 
         tmp = []
         tmp.append(nn.Conv2d(num_in_ch, 2, 1))
-        tmp.append(nn.ELU(inplace=True))
+        tmp.append(nn.Softplus())
         self.model = nn.Sequential(*tmp)
     
     def forward(self, inputs):
@@ -266,15 +269,24 @@ class IntrinsicsDecoder(nn.Module):
           inputs: contains the bottleneck features of the motion encoder. Its shape is [b,c,1,1]. The bottleneck may contain the features of a pair or a snippet. There is one output for each pair or snippet in the batch.
 
         Returns:
-          a tensor with the intrinsic parameters (fx, fy) of shape [b,2,1,1]
+          a tensor of shape [b, 4, 4]. It contains the intrinsic parameters: focal distances (fx, fy) of the offset (ox, oy) (by default at the mid of the frame)
         '''
         intr = self.model(inputs)
+
+        # Known intrinsics
+        b = inputs.size(0)
+
+        intr = torch.Tensor([[0.58, 1.92]]*b).to(inputs.device)
+
         ones = torch.ones_like(intr).to(inputs.device)
         diag_flat = torch.cat([intr, ones], axis=1)
 
         K = torch.diag_embed(torch.squeeze(diag_flat))
-        K[:,0,2] = self.height//2
-        K[:,1,2] = self.width//2
+
+        K[:,0,2] = 0.49
+        K[:,1,2] = 0.49
+        K[:,0,:] *= self.width
+        K[:,1,:] *= self.height
         return K
 
 class PoseDecoder(nn.Module):
@@ -284,15 +296,15 @@ class PoseDecoder(nn.Module):
 
         tmp = []
         tmp.append(nn.Conv2d(num_in_ch, 6*self.num_src, 1))
-        tmp.append(nn.ELU(inplace=True))
         self.model = nn.Sequential(*tmp)
 
     def forward(self, inputs):
         '''
         Args:
-          inputs: A batch of input snippets of shape [bs, 3 * (1 + num_src), h, w]
+          inputs: A batch of snippet representations [bs * num_src, num_in_ch]
         Returns:
-          A tensor with the relate camera motion matrixes. It has a shape of [bs * num_src, 3, 3))]. out[i * num_src + j] has the relative camera motion between inputs[i,0] ans inputs[i,j+1]
+          
+          A tensor of shape [bs * num_src, 4, 4]. It has the relative camera motion between snippet[i,0] ans snippet[i,j+1]
         '''
         batch_size = inputs.size(0)
         outs = self.model(inputs)
@@ -312,7 +324,7 @@ class PoseDecoder(nn.Module):
          
 
 class MotionNet(nn.Module):
-    def __init__(self, seq_len, width, height, pretrained=True):
+    def __init__(self, seq_len, width, height, pretrained=True, learn_intrinsics=False):
         super(MotionNet, self).__init__()
 
         self.width = width
@@ -328,8 +340,10 @@ class MotionNet(nn.Module):
 
         self.of_dec = CustomDecoder(self.enc.num_ch_skipt, num_ch_out=2*(self.seq_len - 1)) 
 
-
         self.bottleneck = None
+
+        # TODO: remove
+        self.learn_intrinsics = learn_intrinsics 
 
     def forward(self, inputs):
         '''
@@ -359,8 +373,20 @@ class MotionNet(nn.Module):
         self.bottleneck = F.adaptive_avg_pool2d(feats[-1], (1,1))
         T = self.pose_dec(self.bottleneck)
 
-        K = self.in_dec(self.bottleneck)
+        if self.learn_intrinsics:
+            K = self.in_dec(self.bottleneck)
+        else:
+            intr = torch.Tensor([[0.58, 1.92]]*b).to(inputs.device)
+            ones = torch.ones_like(intr).to(inputs.device)
+            diag_flat = torch.cat([intr, ones], axis=1)
 
+            K = torch.diag_embed(torch.squeeze(diag_flat))
+
+            K[:,0,2] = 0.49
+            K[:,1,2] = 0.49
+            K[:,0,:] *= self.width
+            K[:,1,:] *= self.height
+ 
         K_pyr = [K]
         for i in range(1, num_scales):
             tmp = K.clone()

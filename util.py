@@ -15,10 +15,10 @@ def optical_flow_to_rgb(flows):
     for i in range(len(flows)):
         mag, ang = cv2.cartToPolar(flows[i,0,...], flows[i,1,...])
         hsv = np.zeros(shape=(h, w, 3), dtype='float32')
-        hsv[...,0] = ang*180/np.pi/2
-        hsv[...,1] = 255.0
-        hsv[...,2] = cv2.normalize(mag,None,0,255,cv2.NORM_MINMAX)
-        rgb = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR).astype('uint8')
+        hsv[...,0] = (ang*180/np.pi)/2 # true_angle / 2, hue range [0, 180]
+        hsv[...,1] = cv2.normalize(mag, None, 0, 255, cv2.NORM_MINMAX)
+        hsv[...,2] = 255
+        rgb = cv2.cvtColor(hsv.astype('uint8'), cv2.COLOR_HSV2BGR)
         rgbs.append(rgb)
 
     rgbs = np.array(rgbs).transpose([0,3,1,2])
@@ -41,3 +41,9 @@ def gray_to_rgb(depths, cmap='rainbow'):
     rgbs = np.array(rgbs, dtype='float32').transpose([0,3,1,2])
     return torch.tensor(rgbs)
     
+def human_time(secs):
+    secs = int(secs)
+    return '{}:{}:{}'.format(secs//3600, (secs%3600)//60, secs%60)
+
+def any_nan(x):
+    return  (x != x).any().item()
