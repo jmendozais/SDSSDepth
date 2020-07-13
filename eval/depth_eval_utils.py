@@ -51,7 +51,7 @@ def compute_errors(gt, pred):
 
     return abs_rel, sq_rel, rmse, rmse_log, a1, a2, a3
 
-def compute_metrics(pred_depths, gt_depths, min_depth, max_depth, scale_factor):
+def compute_metrics(pred_depths, gt_depths, min_depth, max_depth, scale_factor=None):
     num_test = len(pred_depths)
     rms     = np.zeros(num_test, np.float32)
     log_rms = np.zeros(num_test, np.float32)
@@ -77,7 +77,8 @@ def compute_metrics(pred_depths, gt_depths, min_depth, max_depth, scale_factor):
         crop_mask[crop[0]:crop[1],crop[2]:crop[3]] = 1
         mask = np.logical_and(mask, crop_mask)
 
-        #scale_factor = np.median(gt_depth[mask])/np.median(pred_depth[mask])
+        if scale_factor == None:
+            scale_factor = np.median(gt_depth[mask])/np.median(pred_depth[mask])
         pred_depth[mask] *= scale_factor
 
         pred_depth[pred_depth < min_depth] = min_depth
@@ -90,8 +91,8 @@ def compute_metrics(pred_depths, gt_depths, min_depth, max_depth, scale_factor):
     metrics = {
                 'abs_rel': abs_rel.mean(),
                 'sq_rel': sq_rel.mean(),
-                'rms': rms.mean(),
-                'log_rms': log_rms.mean(),
+                'rmse': rms.mean(),
+                'log_rmse': log_rms.mean(),
                 'd1_all': d1_all.mean(),
                 'a1': a1.mean(),
                 'a2': a2.mean(),
@@ -99,15 +100,4 @@ def compute_metrics(pred_depths, gt_depths, min_depth, max_depth, scale_factor):
               }
 
     return metrics
-
-def predict(data_loader, model):
-    preds = []
-    for i, data in enumerate(test_loader, 0):
-        with torch.no_grad():    
-            inp = data[0].to(model.device)
-            pred = model.depth_net(inp[:,0])
-            preds.append(pred[0].cpu().numpy())
-    preds = np.concatenate(preds, axis=0).squeeze(1)
-    return preds
-
 

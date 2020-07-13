@@ -23,6 +23,7 @@ CONTAINER='41e541473596'
 
 
 #ded $CONTAINER "CUDA_VISIBLE_DEVICES=0 python -u $(pwd)/train.py --log ${DATADIR}/debug-gridsample-eps-enabled --weight-ds 1e-2 --weight-ofs 0 --weight-ec 0 -b 4 --epoch 20 &>$(pwd)/debug-gridsample-eps-enabled.txt"
+
 #ded $CONTAINER "CUDA_VISIBLE_DEVICES=0 python -u $(pwd)/train.py --log ${DATADIR}/debug-gridsample-enabled --weight-ds 1e-2 --weight-ofs 0 --weight-ec 0 -b 4 --epoch 20 &>$(pwd)/debug-gridsample-enabled.txt"
 
 

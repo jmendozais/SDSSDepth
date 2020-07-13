@@ -19,6 +19,14 @@ from efficientnet_pytorch.utils import (
     MemoryEfficientSwish,
 )
 
+from pycls.core.config import cfg
+import pycls.core.config as config
+import pycls.core.builders as builders
+import pycls.core.checkpoint as checkpoint
+
+from pycls.models.regnet import RegNet
+from pycls.models.anynet import get_stem_fun
+
 from util import any_nan
 
 class MultiInputEfficientNet(EfficientNet):
@@ -87,7 +95,7 @@ class MultiInputEfficientNet(EfficientNet):
             model._conv_stem = Conv2d(num_inputs*3, out_channels, kernel_size=3, stride=2, bias=False)
 
             with torch.no_grad():
-                model._conv_stem.weight.copy_(torch.cat([tmp]*num_inputs, 1)/2)
+                model._conv_stem.weight.copy_(torch.cat([tmp]*num_inputs, 1)/num_inputs)
 
         return model
 
@@ -160,6 +168,55 @@ class MultiInputResNetEncoder(nn.Module):
 
         return self.feats
 
+class MultiInputRegNetEncoder(nn.Module):
+    def __init__(self, num_inputs=1, pretrained=True):
+        super(MultiInputRegNetEncoder, self).__init__()
+
+        self.num_inputs = num_inputs
+        self.pretrained = pretrained
+        self._CONFIG_FILE = '/home/phd/ra153646/robustness/robustdepthflow/misc/RegNetY-800MF_dds_1gpu.yaml'
+        self._WEIGTHS_FILE = '/home/phd/ra153646/robustness/robustdepthflow/misc/RegNetY-800MF_dds_8gpu.pyth'
+
+        self.num_ch_skipt = [32, 64, 128, 320, 768]
+
+        self.net = self.create_multiinput_regnet()
+
+
+    def forward(self, x):
+        feats = []
+        modules = [module for module in self.net.children()]
+        for i in range(5):
+            x = modules[i](x)
+            feats.append(x)
+        return feats
+
+    def create_multiinput_regnet(self): 
+        assert self.num_inputs != None
+        assert self.pretrained != None
+
+        config.load_cfg("", self._CONFIG_FILE)
+        model = builders.build_model()
+
+        ms = model.module if cfg.NUM_GPUS > 1 else model
+
+        if self.pretrained:
+            checkpoint = torch.load(self._WEIGTHS_FILE, map_location="cpu")
+
+        if self.num_inputs > 1:
+            stem_fun = get_stem_fun(cfg.REGNET.STEM_TYPE) 
+            ms.stem = stem_fun(3 * self.num_inputs, cfg.ANYNET.STEM_W)
+
+            if self.pretrained:
+                checkpoint = torch.load(self._WEIGTHS_FILE, map_location="cpu")
+                weight = checkpoint['model_state']['stem.conv.weight']
+                checkpoint['model_state']['stem.conv.weight'] = torch.cat([weight] * self.num_inputs, 1) / self.num_inputs
+
+        if self.pretrained:
+            ms.load_state_dict(checkpoint['model_state'])
+
+        return ms
+ 
+
 class CustomDecoder(nn.Module):
     def __init__(self, num_ch_skipt, num_ch_out, out_act_fn=lambda x: x, scales=range(4)):
         super(CustomDecoder, self).__init__()
@@ -231,7 +288,8 @@ class DepthNet(nn.Module):
     def __init__(self, pretrained=True):
         super(DepthNet, self).__init__()
         #self.enc = MultiInputResNetEncoder(num_inputs=1, pretrained=pretrained)
-        self.enc = MultiInputEfficientNetEncoder(num_inputs=1, pretrained=pretrained)
+        #self.enc = MultiInputEfficientNetEncoder(num_inputs=1, pretrained=pretrained)
+        self.enc = MultiInputRegNetEncoder(num_inputs=1, pretrained=pretrained)
         '''
         Activation functions and depth range. Current implementations use sigmoid activations and bound depth values in a range (i.e. monodepth2 0.1 - 100). 
         Activation scaling. Most depth estimation network scale the disp outputs by a factor (numerical stability)
@@ -273,10 +331,10 @@ class IntrinsicsDecoder(nn.Module):
         '''
         intr = self.model(inputs)
 
-        # Known intrinsics
         b = inputs.size(0)
 
-        intr = torch.Tensor([[0.58, 1.92]]*b).to(inputs.device)
+        # Known intrinsics
+        #intr = torch.Tensor([[0.58, 1.92]]*b).to(inputs.device)
 
         ones = torch.ones_like(intr).to(inputs.device)
         diag_flat = torch.cat([intr, ones], axis=1)
@@ -308,7 +366,7 @@ class PoseDecoder(nn.Module):
         '''
         batch_size = inputs.size(0)
         outs = self.model(inputs)
-        outs = outs.view(batch_size * self.num_src, 6)
+        outs = outs.view(batch_size * self.num_src, 6) * 0.01
 
         r = torch.squeeze(outs[:,:3])
         R = transforms3D.euler_angles_to_matrix(r, convention='XYZ')
@@ -332,7 +390,8 @@ class MotionNet(nn.Module):
         self.seq_len = seq_len
 
         #self.enc = MultiInputResNetEncoder(num_inputs=2, pretrained=pretrained)
-        self.enc = MultiInputEfficientNetEncoder(num_inputs=self.seq_len, pretrained=pretrained)
+        #self.enc = MultiInputEfficientNetEncoder(num_inputs=self.seq_len, pretrained=pretrained)
+        self.enc = MultiInputRegNetEncoder(num_inputs=self.seq_len, pretrained=pretrained)
 
         bottleneck_dim = self.enc.num_ch_skipt[-1]
         self.in_dec = IntrinsicsDecoder(self.height, self.width, bottleneck_dim)

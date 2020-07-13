@@ -17,6 +17,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--predict', action='store_true')
+    parser.add_argument('--single-scalor', action='store_true')
     # TODO: save and load predictions elementwise when the test set is too large
     parser.add_argument('--elementwise', action='store_true')
 
@@ -24,7 +25,7 @@ if __name__ == '__main__':
     parser.add_argument('-i', '--input-file', default="data/kitti/test_files_eigen.txt")
     parser.add_argument('-p', '--pred-file', default="depth.npy")
     parser.add_argument('-g', '--gt-file', default="/data/ra153646/robustness/eval/kitti_depth_gt.npy")
-    parser.add_argument('-d', '--data-dir', default="/data/ra153646/datasets/KITTI/dataset")
+    parser.add_argument('-d', '--data-dir', default="/data/ra153646/datasets/KITTI/raw_data")
 
     parser.add_argument('--height', type=int, default=128)
     parser.add_argument('--width', type=int, default=416)
@@ -49,13 +50,18 @@ if __name__ == '__main__':
 
         model = checkpoint['model']
         model.to(args.device)
-        model = model.eval()
+        model.eval()
         
         test_set = data.Dataset(args.data_dir, args.input_file, height=args.height, width=args.width, num_scales=num_scales, seq_len=seq_len, is_training=False)
         test_loader = torch.utils.data.DataLoader(test_set, args.batch_size, shuffle=False, num_workers=args.workers, pin_memory=True, drop_last=False)
 
-        preds = predict(test_loader, model)
-
+        preds = []
+        for i, data in enumerate(test_loader, 0):
+            with torch.no_grad():    
+                inp = data[0].to(args.device)
+                depth, feats = model.depth_net(inp[:,0])
+                preds.append(depth[0].cpu().numpy())
+        preds = np.concatenate(preds, axis=0).squeeze(1)
         np.save(args.pred_file, preds)
     else:
         gt_depths = np.load(args.gt_file, allow_pickle=True)
@@ -69,8 +75,11 @@ if __name__ == '__main__':
         assert len(pred_depths) == num_test
 
         pred_depths = resize_like(pred_depths, gt_depths)
-        scale_factor = compute_scale_factor(pred_depths, gt_depths, args.min_depth, args.max_depth)
-        metrics = compute_metrics(pred_depths, gt_depths, args.min_depth, args.max_depth, scale_factor)
+        if args.single_scalor:
+            scale_factor = compute_scale_factor(pred_depths, gt_depths, args.min_depth, args.max_depth)
+            metrics = compute_metrics(pred_depths, gt_depths, args.min_depth, args.max_depth, scale_factor)
+        else:
+            metrics = compute_metrics(pred_depths, gt_depths, args.min_depth, args.max_depth)
 
         for metric, value in metrics.items():
             print('{} : {:.4f}'.format(metric, value))

@@ -12,7 +12,6 @@ from PIL import Image
 import cv2
 from turbojpeg import TurboJPEG as JPEG
 
-from util import any_nan
 #from memory_profiler import profile
 
 '''
@@ -97,7 +96,6 @@ class Dataset(data.Dataset):
         """
 
         # Load image neighborhood
-        #start = time.perf_counter()
         index = self.valid_idxs[index]
         
         start_all = time.perf_counter()
@@ -166,7 +164,10 @@ class Dataset(data.Dataset):
                 if do_flip:
                     snippet[i] = snippet[i].transpose(Image.FLIP_LEFT_RIGHT)
 
+
         # Multi-scale data
+
+
         ms_snippet = dict()
         for i in range(1, self.num_scales):
             size = (self.width//(2**i), self.height//(2**i))
@@ -174,13 +175,13 @@ class Dataset(data.Dataset):
             for j in range(len(snippet)):
                 tmp = snippet[j].resize(size, resample=2)
                 scaled_snippet.append(func.to_tensor(tmp))
+                scaled_snippet[-1] = func.normalize(scaled_snippet[-1], mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
-            scaled_snippet = torch.stack(scaled_snippet) 
-            assert not any_nan(scaled_snippet)
-            ms_snippet[i] = scaled_snippet
+            ms_snippet[i] = torch.stack(scaled_snippet) 
 
         for i in range(len(snippet)):
             snippet[i] = func.to_tensor(snippet[i]) 
+            snippet[i] = func.normalize(snippet[i], mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ms_snippet[0] = torch.stack(snippet)
 
         # Load depth
@@ -189,8 +190,6 @@ class Dataset(data.Dataset):
             depth = cv2.resize(depth, (1242, 375), interpolation=cv2.INTER_NEAREST)
             depth = np.expand_dims(depth, axis=2) 
             depth = func.to_tensor(depth)
-
-            assert not any_nan(depth)
 
             ms_snippet[-1] = depth
         

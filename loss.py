@@ -6,44 +6,58 @@ import torchvision.transforms.functional as VF
 from util import any_nan
 
 # losses at image level
-def l1(x, y):
-    abs_diff = torch.abs(x - y)
+def normalized_l1(x, y):
+    abs_diff = torch.abs(x - y)/(x + y + 1e-6)
     return abs_diff.mean(1, keepdim = True)
 
-def min_residual(res, is_soft=False):
-    if is_soft:
-        return F.softmin(res, dim=1)
-    else:
-        return torch.min(res, dim=1)
+def l1(x, y, normalized=False):
+    abs_diff = torch.abs(x - y)
+    if normalized:
+        abs_diff /= (x + y + 1e-6)
+    return abs_diff.mean(1, keepdim = True)
 
-def color_consistency(imgs, recs, dissimilarity=l1, mode='min', return_residuals=False, flow_ok=False):
+def get_dissimilarity(op_name='l1'):
+    if op_name == 'l1':
+        return l1
+    elif op_name == 'normalized_l1':
+        return normalized_l1
+    else:
+        raise NotImplementedError("dis. function {} not implemented".format(op_name))
+
+def get_pooling_op(op_name='min'):
+    if op_name == 'min':
+        return torch.min
+    elif op_name == 'softmin':
+        return F.softmin
+    elif op_name == 'mean':
+        return torch.mean
+    else:
+        raise NotImplementedError("op {} not implemented".format(op_name))
+
+def _temporal_consistency(feats, sampled_feats, dissimilarity='l1', mode='min', half_mode=False, return_residuals=False):
     '''
     Args:
-      imgs: is a list a batch at multiple scales. Each element of the batch is a target image repeated num_source * 2 times, to consider all of the possible reconstructions using the rigid and dynamic flows. [s,b,num_src,3,h,w]
-
-      recs: is a list of a batch of reconstruction at multiple scales. Each element of the batch contain the reconstructions from each source frame and flow type. 
-    '''
-    assert mode == 'min'
-
-    num_scales = len(imgs)
+    )
+    proj_depths: a list of tensors of shape [b*num_src, 1, h, w]. Each tensor contains the target depths projected on the source camera coordinate system at a scale.
+    )'''
+    pooling = get_pooling_op(mode)
+    rho = get_dissimilarity(dissimilarity)
+    num_scales = len(feats)
 
     total_loss = 0
-    # TODO: set weights
-
     res_vec = []
     min_res_vec = []
     for i in range(num_scales):
-        batch_size, num_recs, c, h, w = imgs[i].size()
-        res = dissimilarity(imgs[i].view(-1, c, h, w), recs[i].view(-1, c, h, w))
-        res = res.view(batch_size, num_recs, h, w)
+        print("shape", feats[i].size())
+        b, num_recs, c, h, w = feats[i].size()
+        res = rho(feats[i].view(-1, c, h, w), sampled_feats[i].view(-1, c, h, w))
+        res = res.view(b, num_recs, h, w)
 
-        # just depth 
-
-        if flow_ok: 
-            min_res, idx = min_residual(res, is_soft=False)
+        if half_mode: 
+            res = res[:,:(num_recs//2),:,:]
+            min_res, idx = torch.min(res, dim=1)#pooling(res, dim=1)
         else:
-            depth_res = res[:,:(num_recs//2),:,:]
-            min_res, idx = min_residual(depth_res, is_soft=False)
+            min_res, idx = torch.min(res, dim=1)#pooling(res, dim=1)
 
         # coarser scales have lower weights (inspired by DispNet)
         total_loss += (1/(2**i)) * torch.mean(min_res)
@@ -56,10 +70,23 @@ def color_consistency(imgs, recs, dissimilarity=l1, mode='min', return_residuals
     else:
         return total_loss
 
-def representation_consistency(imgs, recs, proj_depths, sampled_depths, feats, sampled_feats, dissimilarity=l1, mode='min', return_residuals=False):
-    assert mode == 'min'
+def color_consistency(imgs, recs, dissimilarity='l1', mode='min', flow_ok=True, return_residuals=False):
+    '''
+    Args:
+      imgs: is a list a batch at multiple scales. Each element of the batch is a target image repeated num_source * 2 times, to consider all of the possible reconstructions using the rigid and dynamic flows. [s,b,2*num_src,3,h,w]
 
+      recs: is a list of a batch of reconstruction at multiple scales. Each element of the batch contain the reconstructions from each source frame and flow type. It has the same shape of imgs.
+    '''
+    return _temporal_consistency(imgs, recs, dissimilarity, mode=mode, half_mode=not flow_ok, return_residuals=False)
+
+def representation_consistency(imgs, recs, proj_depths, sampled_depths, feats, sampled_feats, weight_dc=1, weight_fc=1, dissimilarity='l1', mode='min', return_residuals=False):
+    '''
+    Args:
+        proj_depths: a list of tensors of shape [b*num_src, 1, h, w]. Each tensor contains the target depths projected on the source camera coordinate system at a scale.
+    '''
     num_scales = len(imgs)
+    pooling = get_pooling_op(mode)
+    rho = get_dissimilarity(dissimilarity)
 
     total_loss = 0
     # TODO: set weights
@@ -67,26 +94,28 @@ def representation_consistency(imgs, recs, proj_depths, sampled_depths, feats, s
     res_vec = []
     min_res_vec = []
     for i in range(num_scales):
-
         batch_size, num_recs, c, h, w = imgs[i].size()
+        res = rho(imgs[i].view(-1, c, h, w), recs[i].view(-1, c, h, w))
+        if weight_dc > 0:
+            depth_res = dissimilarity(proj_depths[i], sampled_depths[i], normalized=True)
+            depth_res = depth_res.view(batch_size, num_recs//2, h, w)
+            depth_res = depth_res.repeat(1, 2, 1, 1)
+            depth_res = depth_res.view(-1, 1, h, w)
+            res += weight_dc * depth_res
 
-        color_res = dissimilarity(imgs[i].view(-1, c, h, w), recs[i].view(-1, c, h, w))
-        depth_res = dissimilarity(proj_depths[i], sampled_depths[i])
-        depth_res = depth_res.repeat(2, 1, 1, 1)
+        if weight_fc > 0 and i > 0: 
+            feat_res = dissimilarity(feats[i-1], sampled_feats[i-1], normalized=True)
+            feat_res = feat_res.view(batch_size, num_recs//2, h, w)
+            feat_res = feat_res.repeat(1, 2, 1, 1)
+            feat_res = feat_res.view(-1, 1, h, w)
+            res += weight_fc * feat_res
 
-        feat_res = 0
-        if i > 0: 
-            feat_res = dissimilarity(feats[i-1], sampled_feats[i-1])
-            feat_res = feat_res.repeat(2, 1, 1, 1)
+        #print(torch.mean(res).item(), torch.mean(depth_res).item(), torch.mean(feat_res).item())
+        #print(torch.mean(res).item(), torch.mean(depth_res).item())
 
-        res = color_res + depth_res + feat_res
+        #import pdb; pdb.set_trace()
         res = res.view(batch_size, num_recs, h, w)
-
-        # just depth 
-        depth_res = res[:,:(num_recs//2),:,:]
-        min_res, idx = torch.min(depth_res, dim=1)
-
-        # min_res, idx = torch.min(res, dim=1)
+        min_res, idx = pooling(res, dim=1)
 
         # coarser scales have lower weights (inspired by DispNet)
         total_loss += (1/(2**i)) * torch.mean(min_res)
@@ -98,6 +127,30 @@ def representation_consistency(imgs, recs, proj_depths, sampled_depths, feats, s
         return total_loss, res_vec, min_res_vec
     else:
         return total_loss
+
+def feature_consistency(feats, sampled_feats, dissimilarity='l1', mode='mean', return_residuals=False):
+    return _temporal_consistency(feats, sampled_feats, dissimilarity, mode, return_residuals=return_residuals)
+
+def depth_consistency(proj_depths, sampled_depths, dissimilarity='l1', mode='mean', return_residuals=False):
+    return _temporal_consistency(proj_depths, sampled_depths, dissimilarity, mode, return_residuals=return_residuals)
+
+def baseline_consistency(imgs, recs, proj_depths, sampled_depths, proj_coords, sampled_coords, feats, sampled_feats, weight_dc=1, weight_fc=1, weight_sc=1, dissimilarity='l1', mode='mean', flow_ok=True, return_residuals=False):
+    if return_residuals:
+        raise NotImplementedError
+    else: 
+        baseline_loss = color_consistency(imgs, recs, dissimilarity, 
+                mode='min', flow_ok=flow_ok, return_residuals=return_residuals)
+
+        if weight_dc > 0:
+            baseline_loss += weight_dc * depth_consistency(proj_depths, sampled_depths, 'normalized_' + dissimilarity, mode, return_residuals)
+
+        if weight_fc > 0:
+            baseline_loss += weight_fc * feature_consistency(feats, sampled_feats, 'normalized_' + dissimilarity, mode, return_residuals)
+
+        if weight_sc > 0:
+            baseline_loss += weight_sc * _temporal_consistency(proj_coords, sampled_coords, 'normalized_' + dissimilarity, mode, return_residuals)
+
+    return baseline_loss
 
 def _gradient_x(img):
     img = F.pad(img, (0,0,0,1), mode='reflect') # todo check the effect of padding on continuity

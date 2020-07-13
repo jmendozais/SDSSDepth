@@ -40,7 +40,14 @@ def gray_to_rgb(depths, cmap='rainbow'):
 
     rgbs = np.array(rgbs, dtype='float32').transpose([0,3,1,2])
     return torch.tensor(rgbs)
-    
+
+def denormalize(img):
+    img = img.cpu()
+    mean = torch.FloatTensor([[[[0.485]], [[0.456]], [[0.406]]]])
+    std = torch.FloatTensor([[[[0.229]], [[0.224]], [[0.225]]]])
+    #print(img.device, mean.device, std.device)
+    return img * std + mean
+
 def human_time(secs):
     secs = int(secs)
     return '{}:{}:{}'.format(secs//3600, (secs%3600)//60, secs%60)

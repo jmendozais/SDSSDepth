@@ -160,6 +160,7 @@ class Model(nn.Module):
             width_i = self.width//(2**i)
             self.ms_backproject.append(BackprojectDepth(self.batch_size * (self.seq_len - 1), height_i, width_i))
             self.ms_applyflow.append(ApplyFlow(self.batch_size * (self.seq_len - 1), height_i, width_i))
+
         # Create depth, pose and flow nets
         # Sent model to devices
         # add parameters pytorch logic
@@ -225,14 +226,14 @@ class Model(nn.Module):
 
         proj_depths_pyr = []
         sampled_depths_pyr = []
+        proj_coords_pyr = []
+        sampled_coords_pyr = []
         feats_pyr = []
         sampled_feats_pyr = []
 
 
         for i in range(self.num_scales):
             batch_size_seq, _, h, w = depth_pyr[i].size()
-            if i > 0:
-                _, num_maps, h2, w2 = depth_feats[i-1].size()
 
             tgt_depths = []
             src_depths = []
@@ -247,10 +248,12 @@ class Model(nn.Module):
 
             tgt_depths = torch.stack(tgt_depths) # [b, 1, h, w]
             tgt_depths = tgt_depths.expand(self.batch_size, self.seq_len - 1, h, w).reshape(-1, 1, h, w)
-            src_depths = torch.stack(src_depths).view(-1, 1, h, w) # [b*(seq_len-1), num_src, h, w]
+            src_depths = torch.stack(src_depths).view(-1, 1, h, w) # [b*num_src, 1, h, w]
 
             # num feats
             if i > 0:
+                _, num_maps, h2, w2 = depth_feats[i-1].size()
+
                 tgt_feats = torch.stack(tgt_feats)
                 tgt_feats = tgt_feats.repeat(1, (self.seq_len - 1), 1, 1).reshape(-1, num_maps, h2, w2)
                 src_feats = torch.stack(src_feats).view(-1, num_maps, h2, w2) 
@@ -266,16 +269,21 @@ class Model(nn.Module):
             rigid_rec = self.grid_sample(src_imgs, src_pix_coords)
             rigid_rec = rigid_rec.view(self.batch_size, self.seq_len - 1, 3, h, w)
 
-            # depths and feats pair
-            proj_depths = proj_tgt_cam_coords.view(-1, 4, h, w)[:,3:4]
+            # depths, 3D coords and feats pair
+            proj_depths = proj_tgt_cam_coords.view(-1, 4, h, w)[:,2:3] # shape??
+            proj_depths_pyr.append(proj_depths.view(self.batch_size, self.seq_len - 1, 1, h, w))
+
             sampled_depths = self.grid_sample(src_depths, src_pix_coords)
-            proj_depths_pyr.append(proj_depths)
-            sampled_depths_pyr.append(sampled_depths)
+            sampled_depths_pyr.append(sampled_depths.view(self.batch_size, self.seq_len - 1, 1, h, w))
+
+            proj_coords_pyr.append(proj_tgt_cam_coords.view(self.batch_size, self.seq_len - 1, 4, h, w))
+            src_cam_coords = self.ms_backproject[i](src_depths, inv_K_pyr[i])
+            sampled_coords_pyr.append(src_cam_coords.view(self.batch_size, self.seq_len - 1, 4, h, w))
 
             if i > 0:
                 sampled_feats = self.grid_sample(src_feats, src_pix_coords)
-                feats_pyr.append(tgt_feats)
-                sampled_feats_pyr.append(sampled_feats)
+                feats_pyr.append(tgt_feats.view(self.batch_size, self.seq_len - 1, num_maps, h, w))
+                sampled_feats_pyr.append(sampled_feats.view(self.batch_size, self.seq_len - 1, num_maps, h, w))
 
             # reconstruct with the optical flow
             src_pix_coords = self.ms_applyflow[i](of_pyr[i])
@@ -298,7 +306,7 @@ class Model(nn.Module):
             
         # reorganize batch
 
-        return tgt_img_pyr, rec_pyr, depth_pyr, proj_depths_pyr, sampled_depths_pyr, feats_pyr, sampled_feats_pyr, of_pyr, T, K_pyr, inv_K_pyr
+        return tgt_img_pyr, rec_pyr, depth_pyr, proj_depths_pyr, sampled_depths_pyr, proj_coords_pyr, sampled_coords_pyr, feats_pyr, sampled_feats_pyr, of_pyr, T, K_pyr, inv_K_pyr
 
 
     def transform_and_project(self, cam_coords, K, T):
@@ -318,15 +326,20 @@ class Model(nn.Module):
         pix_coords = pix_coords[:, :2, :] / (pix_coords[:, 2, :].unsqueeze(1) + 1e-6)
         return proj_cam_coords, pix_coords
 
-    def grid_sample(self, imgs, pix_coords):
+    def grid_sample(self, imgs, pix_coords, return_mask=False):
         _, _, h, w = imgs.size()
         pix_coords = pix_coords.permute(0, 2, 3, 1)
         pix_coords[:,:,:,0] /= (w - 1)
         pix_coords[:,:,:,1] /= (h - 1)
         pix_coords = (pix_coords - 0.5) * 2
 
-        return F.grid_sample(imgs, pix_coords, padding_mode='border')#, align_corners=False)
-        #return F.grid_sample(imgs, pix_coords)#, align_corners=False)
+        if return_mask:
+            mask = torch.logical_and(pix_coords[:,:,:,0] > -1, pix_coords[:,:,:,1] > -1)
+            mask = torch.logical_and(mask, pix_coords[:,:,:,0] < 1)
+            mask = torch.logical_and(mask, pix_coords[:,:,:,1] < 1)
+            return F.grid_sample(imgs, pix_coords, padding_mode='border'), mask
+        else:
+            return F.grid_sample(imgs, pix_coords, padding_mode='border')
 
 def test_model():
     height=64#128
