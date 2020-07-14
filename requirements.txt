@@ -1,6 +1,6 @@
 youtube-dl
-torch==1.5.1
-torchvision==0.6.1
+torch
+torchvision
 pytorch3d
 dill
 tensorboardX

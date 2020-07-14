@@ -42,6 +42,9 @@ def log_results(writer, tgt_imgs, recs, depths, ofs, res, min_res, epoch):
     cols = min(batch_size, 4)
 
     imgs = util.denormalize(tgt_imgs[0][:cols])
+
+    print('shape', imgs.size())
+    _, _, h, w = imgs.size()
     imgs_grid = make_grid(imgs)
 
     depth_colors = util.gray_to_rgb(1.0/depths[0][:cols], 'rainbow')
@@ -51,16 +54,21 @@ def log_results(writer, tgt_imgs, recs, depths, ofs, res, min_res, epoch):
     of_colors = util.optical_flow_to_rgb(ofs[0][:cols*2]) 
     flows_grid = make_grid(of_colors, nrow=cols)
 
-    res_t = torch.transpose(res[0].cpu(), 0, 1)
-    _, _, h, w = res_t.size()
+    if res != None:
+        res_t = torch.transpose(res[0].cpu(), 0, 1)
+        #_, _, h, w = res_t.size()
 
-    rigid_res = res_t[:seq_len-1,:cols].reshape(-1, 1, h, w)
-    rigid_res = util.gray_to_rgb(rigid_res, 'coolwarm')
-    rigid_res_grid = make_grid(rigid_res, nrow=cols)
+        rigid_res = res_t[:seq_len-1,:cols].reshape(-1, 1, h, w)
+        rigid_res = util.gray_to_rgb(rigid_res, 'coolwarm')
+        rigid_res_grid = make_grid(rigid_res, nrow=cols)
 
-    flow_res = res_t[seq_len-1:,:cols].reshape(-1, 1, h, w)
-    flow_res = util.gray_to_rgb(flow_res, 'coolwarm')
-    flow_res_grid = make_grid(flow_res, nrow=cols)
+        flow_res = res_t[seq_len-1:,:cols].reshape(-1, 1, h, w)
+        flow_res = util.gray_to_rgb(flow_res, 'coolwarm')
+        flow_res_grid = make_grid(flow_res, nrow=cols)
+
+        writer.add_histogram('residual/res', res[0].cpu().numpy(), epoch)
+        writer.add_image('rigid_res', rigid_res_grid, epoch)
+        writer.add_image('flow_res', flow_res_grid, epoch)
 
     rec_t = torch.transpose(recs[0].cpu(), 0, 1)
 
@@ -69,22 +77,19 @@ def log_results(writer, tgt_imgs, recs, depths, ofs, res, min_res, epoch):
 
     flow_rec = util.denormalize(rec_t[seq_len-1:,:cols].reshape(-1, 3, h, w))
     flow_rec_grid = make_grid(flow_rec, nrow=cols)
+
     if min_res:
         min_res_colors = util.gray_to_rgb(min_res[0][:cols].unsqueeze(1), 'coolwarm')
         min_res_grid = make_grid(min_res_colors, nrow=cols)
 
+        writer.add_image('min_res', min_res_grid, epoch)
+        writer.add_histogram('residual/min_res', min_res[0].cpu().numpy(), epoch)
+
     writer.add_image('tgt_imgs', imgs_grid, epoch)
     writer.add_image('depths', depths_grid, epoch)
     writer.add_image('flows', flows_grid, epoch)
-    writer.add_image('rigid_res', rigid_res_grid, epoch)
-    writer.add_image('flow_res', flow_res_grid, epoch)
     writer.add_image('rigid_rec', rigid_rec_grid, epoch)
     writer.add_image('flow_rec', flow_rec_grid, epoch)
-    writer.add_image('min_res', min_res_grid, epoch)
-    
-    writer.add_histogram('residual/res', res[0].cpu().numpy(), epoch)
-    if min_res:
-        writer.add_histogram('residual/min_res', min_res[0].cpu().numpy(), epoch)
 
 def log_depth_metrics(writer, gt_depths, pred_depths, min_depth=1e-3, max_depth=80, epoch=None):
     pred_depths = kitti_utils.resize_like(pred_depths, gt_depths)
@@ -193,7 +198,7 @@ if __name__ == '__main__':
             if args.rep_cons:
                 rec_loss = loss.representation_consistency(gt_imgs, recs, proj_depths, sampled_depths, feats, sampled_feats, args.weight_dc, args.weight_fc)
             else:
-                rec_loss = loss.baseline_consistency(gt_imgs, recs, proj_depths, sampled_depths, proj_coords, sampled_coords, feats, sampled_feats, args.weight_dc, args.weight_fc, args.weight_sc)
+                rec_loss = loss.baseline_consistency(gt_imgs, recs, proj_depths, sampled_depths, proj_coords, sampled_coords, feats, sampled_feats, args.weight_dc, args.weight_fc, args.weight_sc, flow_ok=args.flow_ok)
 
             for j in range(num_scales):
                 _, _, c, h, w = data[j].size()
@@ -251,8 +256,8 @@ if __name__ == '__main__':
 
             it += 1
 
-            if i > 10:
-                break
+            #if i > 10:
+            #    break
 
             del batch_loss
             del tgt_imgs, recs, depths, proj_depths, sampled_depths, feats, sampled_feats, ofs, T, K, inv_K 
@@ -261,7 +266,7 @@ if __name__ == '__main__':
 
         model.eval()
 
-        log_idx = random.randint(0, len(val_loader) - 1)
+        log_idx = random.randint(0, 10)#len(val_loader) - 1)
         val_loss = 0
         val_pred_depths = []
         for i, data in enumerate(val_loader, 0):
@@ -285,14 +290,14 @@ if __name__ == '__main__':
                         rec_loss, res, min_res = loss.representation_consistency(gt_imgs, recs, proj_depths, sampled_depths, feats, sampled_feats, args.weight_dc, args.weight_fc, return_residuals=True)
                         log_results(writer, tgt_imgs, recs, tgt_depths, ofs, res, min_res, epoch=epoch)
                     else:
-                        rec_loss = loss.baseline_consistency(gt_imgs, recs, proj_depths, sampled_depths, proj_coords, sampled_coords, feats, sampled_feats, args.weight_dc, args.weight_fc, args.weight_sc)
+                        rec_loss = loss.baseline_consistency(gt_imgs, recs, proj_depths, sampled_depths, proj_coords, sampled_coords, feats, sampled_feats, args.weight_dc, args.weight_fc, args.weight_sc, flow_ok=args.flow_ok)
 
                         log_results(writer, tgt_imgs, recs, tgt_depths, ofs, res=None, min_res=None, epoch=epoch)
                 else:
                     if args.rep_cons:
                         rec_loss = loss.representation_consistency(gt_imgs, recs, proj_depths, sampled_depths, feats, sampled_feats, args.weight_dc, args.weight_fc, args.weight_sc)
                     else:
-                        rec_loss = loss.baseline_consistency(gt_imgs, recs, proj_depths, sampled_depths, proj_coords, sampled_coords, feats, sampled_feats, args.weight_dc, args.weight_fc, args.weight_sc)
+                        rec_loss = loss.baseline_consistency(gt_imgs, recs, proj_depths, sampled_depths, proj_coords, sampled_coords, feats, sampled_feats, args.weight_dc, args.weight_fc, args.weight_sc, flow_ok=args.flow_ok)
 
                 if epoch == 1:
                     val_gt_depths.append(data[-1]) # dict[-1] = depth
@@ -322,7 +327,7 @@ if __name__ == '__main__':
             #print('ops val', time.perf_counter() - start)
             #start = time.perf_counter()
 
-            #if i > 3:
+            #if i > 10:
             #    break
 
         val_loss /= i

@@ -26,11 +26,11 @@ def get_dissimilarity(op_name='l1'):
 
 def get_pooling_op(op_name='min'):
     if op_name == 'min':
-        return torch.min
+        return lambda x: torch.min(x, dim=1)
     elif op_name == 'softmin':
-        return F.softmin
+        return lambda x: F.softmin(x, dim=1)
     elif op_name == 'mean':
-        return torch.mean
+        return lambda x: torch.mean(x, dim=1)
     else:
         raise NotImplementedError("op {} not implemented".format(op_name))
 
@@ -48,18 +48,15 @@ def _temporal_consistency(feats, sampled_feats, dissimilarity='l1', mode='min', 
     res_vec = []
     min_res_vec = []
     for i in range(num_scales):
-        print("shape", feats[i].size())
         b, num_recs, c, h, w = feats[i].size()
         res = rho(feats[i].view(-1, c, h, w), sampled_feats[i].view(-1, c, h, w))
         res = res.view(b, num_recs, h, w)
 
         if half_mode: 
             res = res[:,:(num_recs//2),:,:]
-            min_res, idx = torch.min(res, dim=1)#pooling(res, dim=1)
+            min_res, idx = pooling(res)
         else:
-            min_res, idx = torch.min(res, dim=1)#pooling(res, dim=1)
-
-        # coarser scales have lower weights (inspired by DispNet)
+            min_res, idx = pooling(res)
         total_loss += (1/(2**i)) * torch.mean(min_res)
         if return_residuals:
             res_vec.append(res)
