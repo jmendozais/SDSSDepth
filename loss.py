@@ -6,20 +6,31 @@ import torchvision.transforms.functional as VF
 from util import any_nan
 
 # losses at image level
-def normalized_l1(x, y):
-    abs_diff = torch.abs(x - y)/(x + y + 1e-6)
-    return abs_diff.mean(1, keepdim = True)
+
 
 def l1(x, y, normalized=False):
     abs_diff = torch.abs(x - y)
     if normalized:
-        abs_diff /= (x + y + 1e-6)
+        abs_diff /= (torch.abs(x) + torch.abs(y) + 1e-6)
     return abs_diff.mean(1, keepdim = True)
+    
+def normalized_l1(x, y):
+    return l1(x, y, normalized=True)
+
+def unit_normalized_l1(x, y):
+    '''
+    Is individual vector normalization (L1/L2) + L1/L2 residuals norm a better constraint to enforce feature consistency? (motivation LPIPS)
+    '''
+    x = x/torch.norm(x, 2, dim=1, keepdim=True)
+    y = y/torch.norm(y, 2, dim=1, keepdim=True)
+    return l1(x, y)
 
 def get_dissimilarity(op_name='l1'):
     if op_name == 'l1':
         return l1
     elif op_name == 'normalized_l1':
+        return normalized_l1
+    elif op_name == 'unit_normalized_l1':
         return normalized_l1
     else:
         raise NotImplementedError("dis. function {} not implemented".format(op_name))
@@ -30,7 +41,7 @@ def get_pooling_op(op_name='min'):
     elif op_name == 'softmin':
         return lambda x: F.softmin(x, dim=1)
     elif op_name == 'mean':
-        return lambda x: torch.mean(x, dim=1)
+        return lambda x: (torch.mean(x, dim=1), None)
     else:
         raise NotImplementedError("op {} not implemented".format(op_name))
 
@@ -135,19 +146,28 @@ def baseline_consistency(imgs, recs, proj_depths, sampled_depths, proj_coords, s
     if return_residuals:
         raise NotImplementedError
     else: 
-        baseline_loss = color_consistency(imgs, recs, dissimilarity, 
+        loss_terms = {}
+        cc = color_consistency(imgs, recs, dissimilarity, 
                 mode='min', flow_ok=flow_ok, return_residuals=return_residuals)
+        loss = cc
+        loss_terms['color_cons'] = cc.item()
 
         if weight_dc > 0:
-            baseline_loss += weight_dc * depth_consistency(proj_depths, sampled_depths, 'normalized_' + dissimilarity, mode, return_residuals)
+            dc = weight_dc * depth_consistency(proj_depths, sampled_depths, 'normalized_' + dissimilarity, mode, return_residuals)
+            loss += dc
+            loss_terms['depth_cons'] = dc.item()
 
         if weight_fc > 0:
-            baseline_loss += weight_fc * feature_consistency(feats, sampled_feats, 'normalized_' + dissimilarity, mode, return_residuals)
+            fc = weight_fc * feature_consistency(feats, sampled_feats, 'normalized_' + dissimilarity, mode, return_residuals)
+            loss += fc
+            loss_terms['feat_cons'] = fc.item()
 
         if weight_sc > 0:
-            baseline_loss += weight_sc * _temporal_consistency(proj_coords, sampled_coords, 'normalized_' + dissimilarity, mode, return_residuals)
+            sc = weight_sc * _temporal_consistency(proj_coords, sampled_coords, 'normalized_' + dissimilarity, mode, return_residuals)
+            loss += sc
+            loss_terms['stru_cons'] = sc.item()
 
-    return baseline_loss
+    return loss, loss_terms
 
 def _gradient_x(img):
     img = F.pad(img, (0,0,0,1), mode='reflect') # todo check the effect of padding on continuity

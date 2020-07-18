@@ -43,7 +43,6 @@ def log_results(writer, tgt_imgs, recs, depths, ofs, res, min_res, epoch):
 
     imgs = util.denormalize(tgt_imgs[0][:cols])
 
-    print('shape', imgs.size())
     _, _, h, w = imgs.size()
     imgs_grid = make_grid(imgs)
 
@@ -198,7 +197,7 @@ if __name__ == '__main__':
             if args.rep_cons:
                 rec_loss = loss.representation_consistency(gt_imgs, recs, proj_depths, sampled_depths, feats, sampled_feats, args.weight_dc, args.weight_fc)
             else:
-                rec_loss = loss.baseline_consistency(gt_imgs, recs, proj_depths, sampled_depths, proj_coords, sampled_coords, feats, sampled_feats, args.weight_dc, args.weight_fc, args.weight_sc, flow_ok=args.flow_ok)
+                rec_loss, rec_terms = loss.baseline_consistency(gt_imgs, recs, proj_depths, sampled_depths, proj_coords, sampled_coords, feats, sampled_feats, args.weight_dc, args.weight_fc, args.weight_sc, flow_ok=args.flow_ok)
 
             for j in range(num_scales):
                 _, _, c, h, w = data[j].size()
@@ -236,6 +235,7 @@ if __name__ == '__main__':
                                                 'ofs': ofs_loss.item(),
                                                 'ec': ec_loss.item(),
                                                 'all': batch_loss.item()}, it)
+            writer.add_scalars('loss/batch', rec_terms, it) 
 
             for j in range(len(K)):
                 writer.add_scalars('intrinsics/{}'.format(j), 
@@ -290,14 +290,14 @@ if __name__ == '__main__':
                         rec_loss, res, min_res = loss.representation_consistency(gt_imgs, recs, proj_depths, sampled_depths, feats, sampled_feats, args.weight_dc, args.weight_fc, return_residuals=True)
                         log_results(writer, tgt_imgs, recs, tgt_depths, ofs, res, min_res, epoch=epoch)
                     else:
-                        rec_loss = loss.baseline_consistency(gt_imgs, recs, proj_depths, sampled_depths, proj_coords, sampled_coords, feats, sampled_feats, args.weight_dc, args.weight_fc, args.weight_sc, flow_ok=args.flow_ok)
+                        rec_loss, rec_terms = loss.baseline_consistency(gt_imgs, recs, proj_depths, sampled_depths, proj_coords, sampled_coords, feats, sampled_feats, args.weight_dc, args.weight_fc, args.weight_sc, flow_ok=args.flow_ok)
 
                         log_results(writer, tgt_imgs, recs, tgt_depths, ofs, res=None, min_res=None, epoch=epoch)
                 else:
                     if args.rep_cons:
                         rec_loss = loss.representation_consistency(gt_imgs, recs, proj_depths, sampled_depths, feats, sampled_feats, args.weight_dc, args.weight_fc, args.weight_sc)
                     else:
-                        rec_loss = loss.baseline_consistency(gt_imgs, recs, proj_depths, sampled_depths, proj_coords, sampled_coords, feats, sampled_feats, args.weight_dc, args.weight_fc, args.weight_sc, flow_ok=args.flow_ok)
+                        rec_loss, rec_terms = loss.baseline_consistency(gt_imgs, recs, proj_depths, sampled_depths, proj_coords, sampled_coords, feats, sampled_feats, args.weight_dc, args.weight_fc, args.weight_sc, flow_ok=args.flow_ok)
 
                 if epoch == 1:
                     val_gt_depths.append(data[-1]) # dict[-1] = depth
@@ -352,7 +352,7 @@ if __name__ == '__main__':
         epoch_time = time.perf_counter() - start_epoch
         avg_epoch_time = elapsed_time // epoch 
         expected_training_time = avg_epoch_time * args.epochs
-        print("epoch {}, train loss {:.4f}, val loss {:.4f}, val rmse {:.4f}, val a1 {:.4f}, time {} ({}/{})".format(epoch, train_loss, val_loss, metrics['rmse'], metrics['a1'], util.human_time(epoch_time), util.human_time(elapsed_time),util.human_time(expected_training_time)))
+        print("epoch {}, train: loss {:.4f}, val: loss {:.4f}, are {:.4f}, rmse {:.4f}, (a1, a3) {:.4f},{:.4f}, time {} ({}/{})".format(epoch, train_loss, val_loss, metrics['abs_rel'],  metrics['rmse'], metrics['a1'], metrics['a3'], util.human_time(epoch_time), util.human_time(elapsed_time), util.human_time(expected_training_time)))
 
     writer.close()
         
