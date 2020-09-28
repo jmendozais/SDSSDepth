@@ -14,22 +14,30 @@ from util import any_nan
 
 # Adapted from monodepth2
 
-class Results:
+class Result:
     def __init__(self):
-        self.imgs = []
-        self.tgt_imgs = []
-        self.recs = []
-        self.depths = [] 
-        self.proj_tgt_depths = [] 
-        self.sample_src_depths = [] 
-        self.tgt_feats = [] 
-        self.sampled_src_feats = [] 
-        self.oflows = [] 
-        self.T = []
-        self.Ks = []
-        self.inv_Ks = []
+        self.tgt_imgs_pyr = []
+        self.recs_pyr = []
+        self.gt_imgs_pyr = None
 
-        self.gt_imgs = None
+        self.depths_pyr = [] 
+        self.proj_depths_pyr = [] 
+        self.sampled_depths_pyr = [] 
+        self.tgt_depths_pyr = None
+
+        self.proj_coords_pyr = [] 
+        self.sampled_coords_pyr = [] 
+
+        self.feats_pyr = [] 
+        self.sampled_feats_pyr = [] 
+
+        self.ofs_pyr = [] 
+
+        self.T = []
+        self.K_pyr = []
+        self.inv_K_pyr = []
+
+        self.extra_out_pyr = None
 
 class BackprojectDepth(nn.Module):
     '''
@@ -114,7 +122,7 @@ def backward_hook(module, inp, output):
     for i, out in enumerate(outputs):
         if not isinstance(out, tuple) and not isinstance(out, list):
             out = [out]
-        for j, grad in enumerate(out):
+        for j, grid in enumerate(out):
             nan_mask = torch.isnan(grad)
             if nan_mask.any():
                 print("Backward hook: found NaN in output", module.__class__.__name__)
@@ -139,19 +147,20 @@ def backward_hook(module, inp, output):
 
 
 class Model(nn.Module):
-    def __init__(self, batch_size, num_scales, seq_len, height, width, multiframe_ok=True, learn_intrinsics=False):
+    def __init__(self, batch_size, num_scales, seq_len, height, width, num_extra_channels=0, multiframe_ok=True, learn_intrinsics=False, norm='bn'):
         super(Model, self).__init__()
         self.batch_size = batch_size
         self.num_scales = num_scales
         self.seq_len = seq_len
         self.height = height
         self.width = width
+        self.num_extra_channels = num_extra_channels
 
         self.multiframe_ok = multiframe_ok
         self.motion_seq_len = self.seq_len if self.multiframe_ok else 2
 
-        self.depth_net = DepthNet()
-        self.motion_net = MotionNet(self.motion_seq_len, self.width, self.height, learn_intrinsics=learn_intrinsics)
+        self.depth_net = DepthNet(norm=norm, width=self.width, height=self.height, num_ext_channels=num_extra_channels)
+        self.motion_net = MotionNet(self.motion_seq_len, self.width, self.height, learn_intrinsics=learn_intrinsics, norm=norm, num_ext_channels=num_extra_channels)
 
         self.ms_backproject = nn.ModuleList()
         self.ms_applyflow = nn.ModuleList()
@@ -172,30 +181,22 @@ class Model(nn.Module):
     def forward(self, inputs):
         '''
         Args:
-          inputs: A dict of tensors with entries(i, x) where i is the scale in [0,num_scales), and x is a batch of image snippets at the i-scale. The first element of the snippet is the target frame, then the source frames. The tensor i has a shape [b,seq_len,c, h/2**i, w/2**i].
+          inputs: A dict of tensors with entries(i, x) where i is the scale in [0,num_scales), and x is a batch of image snippets at the i-scale. res.The first element of the snippet is the target frame, then the source frames. The tensor i has a shape [b,seq_len,c, h/2**i, w/2**i].
 
         Returns:
           tgt_img_pyt: a list of tensors. Each tensor has batch of target images repeated by the number of source frame considered, duplicated to consider rigid and optical flow based reconstruction. Each tensor has a shape [b, 2*num_src, 3, h, w].
 
-          tgt_rec_pyr: [b, 2*num_src, c, h, w]
+          tgt_res.recs_pyr: [b, 2*num_src, c, h, w]
 
-          tgt_depth_pyr: a list of tensors. Each tensor has a batch of depth maps of shape [b, 1, h, w] 
+          tgt_res.depth_pyr: a list of tensors. Each tensor has a batch of depth maps of shape [b, 1, h, w] 
 
-          of_pyr: a list of tensors. Each tensor has a batch of optical flows for each target, source image pair. The flows are stacked around the channel dimmension. It has a shape [b*num_src, 2, h, w]
+          res.ofs_pyr: a list of tensors. Each tensor has a batch of optical flows for each target, source image pair. res.The flows are stacked around the channel dimmension. It has a shape [b*num_src, 2, h, w]
           
           (Deprecated) a list of tensors with the batch of warped outputs at multiple scales. Each tensor has a shape of [2 * b * num_sources, c, h_i, w_i] with the rigid reconstructions from [0..b) and the flow reconstructions from [b..2b)
         '''
-
-        # send all elements to devide
+        # Preparing inputs for predicting
         batch_size = len(inputs[0]) # train/test bs may differ
-        
-        # compute depth
-        #tgt_imgs = inputs[0][:,0]
         imgs = inputs[0].view(-1, 3, self.height, self.width)
-
-        depth_pyr, depth_feats = self.depth_net(imgs)
-
-        # compute flow, pose and intrinsics
         motion_ins = []
         if self.multiframe_ok:
             motion_ins = inputs[0].view(batch_size, -1, self.height, self.width)
@@ -205,43 +206,55 @@ class Model(nn.Module):
                     motion_ins.append(torch.cat([inputs[0][i,0], inputs[0][i,j]], axis=0))
             motion_ins = torch.stack(motion_ins)
 
-        of_pyr, T, K_pyr = self.motion_net(motion_ins)
+        res = Result()
+        if self.num_extra_channels:
+            res.depths_pyr, extra_depth_pyr, depth_feats = self.depth_net(imgs)
+            res.ofs_pyr, extra_ofs_pyr, res.T, res.K_pyr = self.motion_net(motion_ins)
 
-        inv_K_pyr = [] 
+            res.extra_out_pyr = []
+        else:
+            res.depths_pyr, depth_feats = self.depth_net(imgs)
+            res.ofs_pyr,  res.T, res.K_pyr = self.motion_net(motion_ins)
+
+        res.inv_K_pyr = []
         for i in range(self.num_scales):
-            inv_K = torch.inverse(K_pyr[i]) 
+            inv_K = torch.inverse(res.K_pyr[i]) 
             if  self.multiframe_ok:
-                K = torch.unsqueeze(K_pyr[i], 1).repeat(1, self.seq_len - 1, 1, 1, 1)
+                K = torch.unsqueeze(res.K_pyr[i], 1).repeat(1, self.seq_len - 1, 1, 1, 1)
                 K = K.view(batch_size * (self.seq_len - 1), 4, 4)
-                K_pyr[i] = K
+                res.K_pyr[i] = K
 
                 inv_K = torch.unsqueeze(inv_K, 1).repeat(1, self.seq_len - 1, 1, 1, 1)
                 inv_K = inv_K.view(batch_size * (self.seq_len - 1), 4, 4)
 
-            inv_K_pyr.append(inv_K)
+            res.inv_K_pyr.append(inv_K)
         
         # reconstructed images at multiple scales
-        tgt_img_pyr = []
-        rec_pyr = []
-
-        proj_depths_pyr = []
-        sampled_depths_pyr = []
-        proj_coords_pyr = []
-        sampled_coords_pyr = []
-        feats_pyr = []
-        sampled_feats_pyr = []
-
+        '''
+        res.tgt_imgs_pyr = []
+        res.recs_pyr = []
+        res.proj_depths_pyr = []
+        res.sampled_depths_pyr = []
+        res.proj_coords_pyr = []
+        res.sampled_coords_pyr = []
+        res.feats_pyr = []
+        res.sampled_feats_pyr = []
+        '''
 
         for i in range(self.num_scales):
-            batch_size_seq, _, h, w = depth_pyr[i].size()
+            bs_seq, _, h, w = res.depths_pyr[i].size()
 
             tgt_depths = []
             src_depths = []
             tgt_feats = []
             src_feats = []
+            extra_depth = []
             for j in range(self.batch_size):
-                tgt_depths.append(depth_pyr[i][j*self.seq_len])
-                src_depths.append(depth_pyr[i][(j*self.seq_len + 1):(j + 1)*self.seq_len])
+                tgt_depths.append(res.depths_pyr[i][j*self.seq_len])
+                src_depths.append(res.depths_pyr[i][(j*self.seq_len + 1):(j + 1)*self.seq_len])
+                if self.num_extra_channels:
+                    extra_depth.append(extra_depth_pyr[i][j*self.seq_len])
+
                 if i > 0:
                     tgt_feats.append(depth_feats[i-1][j*self.seq_len])
                     src_feats.append(depth_feats[i-1][(j*self.seq_len + 1):(j + 1)*self.seq_len])
@@ -249,6 +262,15 @@ class Model(nn.Module):
             tgt_depths = torch.stack(tgt_depths) # [b, 1, h, w]
             tgt_depths = tgt_depths.expand(self.batch_size, self.seq_len - 1, h, w).reshape(-1, 1, h, w)
             src_depths = torch.stack(src_depths).view(-1, 1, h, w) # [b*num_src, 1, h, w]
+
+            if self.num_extra_channels:
+                extra_depth = torch.stack(extra_depth) # [bs, 1, h, w]
+                extra_depth = extra_depth.reshape(self.batch_size, 1, self.num_extra_channels, h, w).repeat(1, self.seq_len - 1, 1, 1, 1)
+
+                # extra_depth shape [bs, num_src, num_extra, h, w]
+                extra_ofs = extra_ofs_pyr[i].view(self.batch_size, self.seq_len - 1, self.num_extra_channels, h, w)
+                
+                res.extra_out_pyr.append(torch.cat([extra_depth, extra_ofs], axis=1))
 
             # num feats
             if i > 0:
@@ -262,8 +284,8 @@ class Model(nn.Module):
             src_imgs = src_imgs.reshape(-1, 3, h, w)
 
             # reconstruct with the rigid flow
-            tgt_cam_coords = self.ms_backproject[i](tgt_depths, inv_K_pyr[i])
-            proj_tgt_cam_coords, src_pix_coords = self.transform_and_project(tgt_cam_coords, K_pyr[i], T)
+            tgt_cam_coords = self.ms_backproject[i](tgt_depths, res.inv_K_pyr[i])
+            proj_tgt_cam_coords, src_pix_coords = self.transform_and_project(tgt_cam_coords, res.K_pyr[i], res.T)
             src_pix_coords = src_pix_coords.view(self.batch_size * (self.seq_len - 1), 2, h, w)
 
             rigid_rec = self.grid_sample(src_imgs, src_pix_coords)
@@ -271,29 +293,29 @@ class Model(nn.Module):
 
             # depths, 3D coords and feats pair
             proj_depths = proj_tgt_cam_coords.view(-1, 4, h, w)[:,2:3] # shape??
-            proj_depths_pyr.append(proj_depths.view(self.batch_size, self.seq_len - 1, 1, h, w))
+            res.proj_depths_pyr.append(proj_depths.view(self.batch_size, self.seq_len - 1, 1, h, w))
 
             sampled_depths = self.grid_sample(src_depths, src_pix_coords)
-            sampled_depths_pyr.append(sampled_depths.view(self.batch_size, self.seq_len - 1, 1, h, w))
+            res.sampled_depths_pyr.append(sampled_depths.view(self.batch_size, self.seq_len - 1, 1, h, w))
 
-            proj_coords_pyr.append(proj_tgt_cam_coords.view(self.batch_size, self.seq_len - 1, 4, h, w))
-            src_cam_coords = self.ms_backproject[i](src_depths, inv_K_pyr[i])
-            sampled_coords_pyr.append(src_cam_coords.view(self.batch_size, self.seq_len - 1, 4, h, w))
+            res.proj_coords_pyr.append(proj_tgt_cam_coords.view(self.batch_size, self.seq_len - 1, 4, h, w))
+            src_cam_coords = self.ms_backproject[i](src_depths, res.inv_K_pyr[i])
+            res.sampled_coords_pyr.append(src_cam_coords.view(self.batch_size, self.seq_len - 1, 4, h, w))
 
             if i > 0:
                 sampled_feats = self.grid_sample(src_feats, src_pix_coords)
-                feats_pyr.append(tgt_feats.view(self.batch_size, self.seq_len - 1, num_maps, h, w))
-                sampled_feats_pyr.append(sampled_feats.view(self.batch_size, self.seq_len - 1, num_maps, h, w))
+                res.feats_pyr.append(tgt_feats.view(self.batch_size, self.seq_len - 1, num_maps, h, w))
+                res.sampled_feats_pyr.append(sampled_feats.view(self.batch_size, self.seq_len - 1, num_maps, h, w))
 
             # reconstruct with the optical flow
-            src_pix_coords = self.ms_applyflow[i](of_pyr[i])
+            src_pix_coords = self.ms_applyflow[i](res.ofs_pyr[i])
             src_pix_coords = src_pix_coords.view(self.batch_size * (self.seq_len - 1), 2, h, w)
 
             flow_rec = self.grid_sample(src_imgs, src_pix_coords)
             flow_rec = flow_rec.view(self.batch_size, self.seq_len - 1, 3, h, w)
 
             #flow_rec.append(self.grid_sample(src_imgs, src_pix_coords))
-            rec_pyr.append(torch.cat([rigid_rec, flow_rec], axis=1))
+            res.recs_pyr.append(torch.cat([rigid_rec, flow_rec], axis=1))
             # reconstruct with a large
             tgt_imgs = F.interpolate(inputs[i][:,0], size=(h, w), mode='bilinear', align_corners=False)
 
@@ -302,11 +324,10 @@ class Model(nn.Module):
             #tgt_imgs = tgt_imgs.reshape(b * (self.seq_len - 1), 3, h, w)
             #tgt_imgs = torch.cat([tgt_imgs, tgt_imgs], axis=1) # duplicate for flow and rigid
 
-            tgt_img_pyr.append(tgt_imgs)
+            res.tgt_imgs_pyr.append(tgt_imgs)
             
         # reorganize batch
-
-        return tgt_img_pyr, rec_pyr, depth_pyr, proj_depths_pyr, sampled_depths_pyr, proj_coords_pyr, sampled_coords_pyr, feats_pyr, sampled_feats_pyr, of_pyr, T, K_pyr, inv_K_pyr
+        return res
 
 
     def transform_and_project(self, cam_coords, K, T):
@@ -349,11 +370,9 @@ def test_model():
     batch_size=2
     train_set = MovingExp('./data/moving_exp/sample/ytwalking_frames', './data/moving_exp/sample/ytwalking_frames/clips.txt', height=height, width=width, num_scales=num_scales, seq_len=seq_len)
 
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=2, pin_memory=True, drop_last=True)
+    train_loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=2, pin_memory=True, drop_last=True)
 
-    print('create model')
     model = Model(batch_size, num_scales, seq_len, height, width)
-    print('end model')
 
     for i, data in enumerate(train_loader, 0):
         with torch.no_grad():

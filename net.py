@@ -28,11 +28,13 @@ from pycls.models.regnet import RegNet
 from pycls.models.anynet import get_stem_fun
 
 from util import any_nan
+from normalization import *
 
 class MultiInputEfficientNet(EfficientNet):
 
     def __init__(self, blocks_args=None, global_params=None):
         super(MultiInputEfficientNet, self).__init__(blocks_args, global_params)
+
 
     def extract_features(self, inputs):
         """use convolution layer to extract feature .
@@ -59,6 +61,7 @@ class MultiInputEfficientNet(EfficientNet):
 
         return feats
 
+
     def forward(self, inputs):
         """EfficientNet's forward function.
            Calls extract_features to extract features, applies final linear layer, and returns logits.
@@ -82,6 +85,7 @@ class MultiInputEfficientNet(EfficientNet):
         blocks_args, global_params = get_model_params(model_name, override_params)
         return cls(blocks_args, global_params)
 
+
     @classmethod
     def from_pretrained(cls, model_name, advprop=False, num_classes=1000, num_inputs=1):
         model = cls.from_name(model_name, override_params={'num_classes': num_classes})
@@ -99,7 +103,9 @@ class MultiInputEfficientNet(EfficientNet):
 
         return model
 
+
 class MultiInputResNet(models.ResNet):
+
     def __init__(self, block, layers, num_classes=1000, num_inputs=1):
         super(MultiInputResNet, self).__init__(block, layers)
         self.inplanes = 64
@@ -120,6 +126,7 @@ class MultiInputResNet(models.ResNet):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
 
+
     @classmethod
     def from_pretrained(num_inputs=1, pretrained=False):
         blocks = [2, 2, 2, 2]
@@ -134,7 +141,9 @@ class MultiInputResNet(models.ResNet):
 
         return model
 
+
 class MultiInputEfficientNetEncoder(nn.Module):
+
     def __init__(self, num_inputs=1, pretrained=False):
         super(MultiInputEfficientNetEncoder, self).__init__()
 
@@ -147,6 +156,7 @@ class MultiInputEfficientNetEncoder(nn.Module):
 
 
 class MultiInputResNetEncoder(nn.Module):
+
     def __init__(self, num_inputs=1, pretrained=False):
         super(MultiInputResNetEncoder, self).__init__()
 
@@ -167,13 +177,17 @@ class MultiInputResNetEncoder(nn.Module):
         self.feats.append(self.net.layer4(self.feats[-1])) # H/32xW/32
 
         return self.feats
-
+        
 class MultiInputRegNetEncoder(nn.Module):
-    def __init__(self, num_inputs=1, pretrained=True):
+
+    def __init__(self, num_inputs=1, pretrained=True, norm='bn', height=-1, width=-1):
         super(MultiInputRegNetEncoder, self).__init__()
 
         self.num_inputs = num_inputs
         self.pretrained = pretrained
+        self.norm = norm
+        self.height = height 
+        self.weidth = width
         self._CONFIG_FILE = '/home/phd/ra153646/robustness/robustdepthflow/misc/RegNetY-800MF_dds_1gpu.yaml'
         self._WEIGTHS_FILE = '/home/phd/ra153646/robustness/robustdepthflow/misc/RegNetY-800MF_dds_8gpu.pyth'
 
@@ -189,6 +203,7 @@ class MultiInputRegNetEncoder(nn.Module):
             x = modules[i](x)
             feats.append(x)
         return feats
+
 
     def create_multiinput_regnet(self): 
         assert self.num_inputs != None
@@ -214,10 +229,32 @@ class MultiInputRegNetEncoder(nn.Module):
         if self.pretrained:
             ms.load_state_dict(checkpoint['model_state'])
 
+        if self.norm != 'bn':
+            modules_by_name = ms.named_modules()
+            names = checkpoint['model_state'].keys()
+            bn_layers = set()
+            for name in names:
+                if 'bn' in name:
+                    name = name[:name.rfind('.')]
+                    bn_layers.add(name)
+
+            for name in bn_layers:
+                attrs = name.split('.')
+                parent = ms
+                for i in range(len(attrs)-1):
+                    parent = getattr(parent, attrs[i])
+                if self.norm == 'nonorm':
+                    setattr(parent, attrs[-1], Identity())
+                elif self.norm == 'rln':
+                    setattr(parent, attrs[-1], RandomLayerNorm())
+                else:
+                    raise NotImplementedError("Initialization mode not implemented")
+
         return ms
  
 
 class CustomDecoder(nn.Module):
+
     def __init__(self, num_ch_skipt, num_ch_out, out_act_fn=lambda x: x, scales=range(4)):
         super(CustomDecoder, self).__init__()
         assert len(num_ch_skipt) == len(scales) + 1
@@ -285,26 +322,47 @@ class CustomDecoder(nn.Module):
         return out
 
 class DepthNet(nn.Module):
-    def __init__(self, pretrained=True):
+
+    def __init__(self, pretrained=True, norm='bn', height=-1, width=-1, num_ext_channels=0):
+        '''
+        loss_params: number of parameter per pixel
+        '''
         super(DepthNet, self).__init__()
+        self.num_ext_channels = num_ext_channels
         #self.enc = MultiInputResNetEncoder(num_inputs=1, pretrained=pretrained)
         #self.enc = MultiInputEfficientNetEncoder(num_inputs=1, pretrained=pretrained)
-        self.enc = MultiInputRegNetEncoder(num_inputs=1, pretrained=pretrained)
+        self.enc = MultiInputRegNetEncoder(num_inputs=1, pretrained=pretrained, norm=norm, height=height, width=width)
         '''
         Activation functions and depth range. Current implementations use sigmoid activations and bound depth values in a range (i.e. monodepth2 0.1 - 100). 
         Activation scaling. Most depth estimation network scale the disp outputs by a factor (numerical stability)
         TODO: If softplus without bounding outputs and scaling do not work, try softplus + scaling or sigmoid + scaling + bounding (it should work, depth-in-theworld paper)
         ''' 
-        self.dec = CustomDecoder(self.enc.num_ch_skipt, num_ch_out=1, out_act_fn=F.softplus)
+        # TODO: 
+        self.dec = CustomDecoder(self.enc.num_ch_skipt, num_ch_out=1 + num_ext_channels)
 
     def forward(self, inputs):
+        '''
+        Returns:
+            depths: A list of tensors with the depth maps at multiple-scales. Each tensor has as shape [bs*seq_len, 1, h, w]
+            extra: A list of tensors with the extra values predicted for each pixel. Each tensor has a shape [bs*seq_len, num_parms, h, w]
+            enc_feats: A list of the feature maps of the depth encoder
+        '''
         enc_feats = self.enc(inputs)
-        depths = self.dec(enc_feats)
+        outs = self.dec(enc_feats)
 
-        for i in range(len(depths)):
-            depths[i] = depths[i] + 1e-6 # TODO: check if it solves the NaN problem
+        depths = []
+        extra = []
+        for i in range(len(outs)):
+            outs[i] = outs[i] + 1e-6 # TODO: check if it solves the NaN problem
+            if self.num_ext_channels:
+                depths.append(F.softplus(outs[i][:,:1,:,:]))
+                extra.append(outs[i][:,1:,:,:])
+        
+        if self.num_ext_channels:
+            return depths, extra, enc_feats
+        else:
+            return outs, enc_feats
 
-        return depths, enc_feats
 
 class IntrinsicsDecoder(nn.Module):
     '''
@@ -333,9 +391,6 @@ class IntrinsicsDecoder(nn.Module):
 
         b = inputs.size(0)
 
-        # Known intrinsics
-        #intr = torch.Tensor([[0.58, 1.92]]*b).to(inputs.device)
-
         ones = torch.ones_like(intr).to(inputs.device)
         diag_flat = torch.cat([intr, ones], axis=1)
 
@@ -347,7 +402,9 @@ class IntrinsicsDecoder(nn.Module):
         K[:,1,:] *= self.height
         return K
 
+
 class PoseDecoder(nn.Module):
+
     def __init__(self, num_src, num_in_ch):
         super(PoseDecoder, self).__init__()
         self.num_src = num_src
@@ -382,22 +439,24 @@ class PoseDecoder(nn.Module):
          
 
 class MotionNet(nn.Module):
-    def __init__(self, seq_len, width, height, pretrained=True, learn_intrinsics=False):
+
+    def __init__(self, seq_len, width, height, pretrained=True, learn_intrinsics=False, norm='bn', num_ext_channels=0):
         super(MotionNet, self).__init__()
 
         self.width = width
         self.height = height
         self.seq_len = seq_len
+        self.num_ext_channels = num_ext_channels
 
         #self.enc = MultiInputResNetEncoder(num_inputs=2, pretrained=pretrained)
         #self.enc = MultiInputEfficientNetEncoder(num_inputs=self.seq_len, pretrained=pretrained)
-        self.enc = MultiInputRegNetEncoder(num_inputs=self.seq_len, pretrained=pretrained)
+        self.enc = MultiInputRegNetEncoder(num_inputs=self.seq_len, pretrained=pretrained, norm=norm, height=self.height, width=self.width)
 
         bottleneck_dim = self.enc.num_ch_skipt[-1]
         self.in_dec = IntrinsicsDecoder(self.height, self.width, bottleneck_dim)
         self.pose_dec = PoseDecoder(self.seq_len - 1, bottleneck_dim)
 
-        self.of_dec = CustomDecoder(self.enc.num_ch_skipt, num_ch_out=2*(self.seq_len - 1)) 
+        self.of_dec = CustomDecoder(self.enc.num_ch_skipt, num_ch_out=(2 + self.num_ext_channels)*(self.seq_len - 1)) 
 
         self.bottleneck = None
 
@@ -411,23 +470,32 @@ class MotionNet(nn.Module):
           otherwise we assume a tensor with frame pairs with shape [b*num_src, 3*2, h, w), num_src = seq_len - 1
 
         Returns:
-          of: 
-            a tensor multi-scale optical flow predictions of shape [b, 2 * num_srcs, h, w]. if multiframe_ok num_srcs is equal to the number of sources framesof the input snippets, otherwise num_srcs is 1.
+          ofs_pyr: 
+            A list of tensors with multi-scale flow predictions. Each tensor has a shape [b * num_src, 2, h, w]. if multiframe_ok num_srcs is equal to the number of sources framesof the input snippets, otherwise num_srcs is 1.
 
           pose: 
             a tensor of shape [b,4,4] with the relative pose parameters a SO(3) transform.
 
           intrinsics: 
             a tensor of shape [b,4,4] with the intrinsic matrix.
+        
+          extra_pyr:
+            A list of tensors with parameters predicted for each pixel at multi-scales. Ech tensor has a shape [b*num_src, num_params, h, w]
         '''
         feats = self.enc(inputs)
 
-        of_pyr = self.of_dec(feats)
-        num_scales = len(of_pyr)
+        outs = self.of_dec(feats)
+        num_scales = len(outs)
+
+        ofs_pyr = []
+        exts_pyr = []
 
         for i in range(num_scales):
-            b, _, h, w = of_pyr[i].size()
-            of_pyr[i] = of_pyr[i].view(b * (self.seq_len - 1), 2, h, w)
+            b, _, h, w = outs[i].size()
+            outs[i] = outs[i].view(b * (self.seq_len - 1), 2 + self.num_ext_channels, h, w)
+
+            ofs_pyr.append(outs[i][:, :2])
+            exts_pyr.append(outs[i][:, 2:])
 
         self.bottleneck = F.adaptive_avg_pool2d(feats[-1], (1,1))
         T = self.pose_dec(self.bottleneck)
@@ -455,8 +523,10 @@ class MotionNet(nn.Module):
             K_pyr.append(tmp)
             
         # ie_dec model does not produce multi-scale outputs, does it need to compute the multiscale intrinsics and extrinsics.
-
-        return of_pyr, T, K_pyr
+        if self.num_ext_channels:
+            return ofs_pyr, exts_pyr, T, K_pyr
+        else:
+            return ofs_pyr, T, K_pyr
 
 #encoder = MultiInputEfficientNetEncoder(num_inputs=2)
 #net = MultiInputEfficientNet.from_pretrained('efficientnet-b0', num_inputs=2)

@@ -17,13 +17,14 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--predict', action='store_true')
+    parser.add_argument('--measure', action='store_true')
     parser.add_argument('--single-scalor', action='store_true')
     # TODO: save and load predictions elementwise when the test set is too large
     parser.add_argument('--elementwise', action='store_true')
 
     parser.add_argument('-c', '--checkpoint')
     parser.add_argument('-i', '--input-file', default="data/kitti/test_files_eigen.txt")
-    parser.add_argument('-p', '--pred-file', default="depth.npy")
+    parser.add_argument('-p', '--pred-file', default=None)
     parser.add_argument('-g', '--gt-file', default="/data/ra153646/robustness/eval/kitti_depth_gt.npy")
     parser.add_argument('-d', '--data-dir', default="/data/ra153646/datasets/KITTI/raw_data")
 
@@ -45,6 +46,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     start = time.perf_counter()
+
     if args.predict:
         checkpoint = torch.load(args.checkpoint)
 
@@ -62,8 +64,14 @@ if __name__ == '__main__':
                 depth, feats = model.depth_net(inp[:,0])
                 preds.append(depth[0].cpu().numpy())
         preds = np.concatenate(preds, axis=0).squeeze(1)
-        np.save(args.pred_file, preds)
-    else:
+        
+        if args.pred_file == None:
+            idx = args.checkpoint.rfind('.')
+            assert idx != -1
+            args.pred_file = args.checkpoint[:idx] + '.npy'
+            np.save(args.pred_file, preds)
+
+    if args.measure:
         gt_depths = np.load(args.gt_file, allow_pickle=True)
         pred_depths = np.load(args.pred_file, allow_pickle=True)
 

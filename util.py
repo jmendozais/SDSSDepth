@@ -2,6 +2,7 @@ import numpy as np
 import cv2
 import matplotlib.pyplot as plt
 import torch
+import torch.nn.functional as F
 
 def optical_flow_to_rgb(flows):
     '''
@@ -54,3 +55,14 @@ def human_time(secs):
 
 def any_nan(x):
     return  (x != x).any().item()
+
+def affine_softplus(x, lo=0, ref=1):
+  """Maps real numbers to (lo, infinity), where 0 maps to ref."""
+  if not lo < ref:
+    raise ValueError('`lo` (%g) must be < `ref` (%g)' % (lo, ref))
+  x = torch.as_tensor(x)
+  lo = torch.as_tensor(lo)
+  ref = torch.as_tensor(ref)
+  shift = inv_softplus(torch.tensor(1.))
+  y = (ref - lo) * torch.nn.Softplus()(x + shift) + lo
+  return y
