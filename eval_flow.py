@@ -30,9 +30,11 @@ if __name__ == '__main__':
     parser.add_argument('--predict', action='store_true')
 
     parser.add_argument('-c', '--checkpoint')
-    parser.add_argument('-d', '--data-dir', default="/data/ra153646/datasets/sintel/MPI-Sintel-complete")
-    parser.add_argument('-d', '--clean-file', default="data/test_clean.txt")
-    parser.add_argument('-d', '--final-file', default="data/test_final.txt")
+
+    parser.add_argument('--config-file', is_config_file=True)
+    parser.add_argument('-d', '--dataset-dir', default="/data/ra153646/datasets/sintel/MPI-Sintel-complete")
+    parser.add_argument('-d', '--test-file', default="data/sintel/test-clean.txt")
+
     parser.add_argument('-o', '--out-dir', default="baseline_of")
 
     parser.add_argument('--height', type=int, default=128)
@@ -43,7 +45,9 @@ if __name__ == '__main__':
     parser.add_argument('--workers', type=int, default=4)
     parser.add_argument('--device', default='cuda')
 
-    seq_len = 1
+    # The motion network predicts a set of flow maps for frame snippets of a fixed number of frames in one pass.
+    # Thus, it should operate with frame snippets of the same size on test stage.
+
     num_scales = 4
 
     args = parser.parse_args()
@@ -56,19 +60,22 @@ if __name__ == '__main__':
         model.to(args.device)
         model = model.eval()
         
-        test_set = data.Dataset(args.data_dir, args.clean_file, height=args.height, width=args.width, num_scales=num_scales, seq_len=seq_len, is_training=False)
+        test_set = data.Dataset(args.data_dir, args.clean_file, height=args.height, width=args.width, num_scales=num_scales, seq_len=model.seq_len, is_training=False)
         test_loader = torch.utils.data.DataLoader(test_set, args.batch_size, shuffle=False, num_workers=args.workers, pin_memory=True, drop_last=False)
 
-        clean_preds = predict(test_loader, model)
+        preds = []
+        for i, data_pair in enumerate(test_loader, 0):
+            with torch.no_grad():    
+                data, data_noaug = data_pair
+
+                inps = model.prepare_motion_inputs(data) # check seq_len compatibility
+
+                outs, _, _, _ = model.motion_net(inps)
+                preds.append(outs[0].cpu().numpy())
+
+        preds = np.concatenate(preds, axis=0).squeeze(1)
 
         save_optical_flows(clean_preds, test_set.files, os.path.join(args.out_dir, 'clean'))
-
-        test_set = data.Dataset(args.data_dir, args.final_file, height=args.height, width=args.width, num_scales=num_scales, seq_len=seq_len, is_training=False)
-        test_loader = torch.utils.data.DataLoader(test_set, args.batch_size, shuffle=False, num_workers=args.workers, pin_memory=True, drop_last=False)
-
-        final_preds = predict(test_loader, model)
-
-        save_optical_flows(final_preds, test_set.files, os.path.join(args.out_dir, 'final'))
 
     print('time: ', time.perf_counter() - start)
 

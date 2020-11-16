@@ -16,15 +16,11 @@ from turbojpeg import TurboJPEG as JPEG
 
 '''
 A dataset is compose of a set of clips. For each clip there is a directory that contains its frames.
-TODO: Check if numpy RNG have the same behavior when forked by the data loader.
-
-Desired properties of the dataset
-- It should allow us to perform scale normalization by each clip at testing time.
-- It should allow us to iterate through the dataset randomly on training time.
-- It should allow us to select the size of the nehigboorhood.
 
 Input: 
-    A list with the clip names for training/validation/testing. We create a dataset instance for each clip of the validation/test set, and one instance for the training set.
+
+    A list with the clip names for training/validation/testing:
+        We create a dataset instance for each clip of the validation/test set, and one instance for the training set.
 '''
 
 class Dataset(data.Dataset):
@@ -36,7 +32,8 @@ class Dataset(data.Dataset):
             num_scales=4,
             seq_len=3,
             is_training=True,
-            load_depth=False
+            load_depth=False,
+            load_flow=False
             ):
 
         self.data_dir = data_dir
@@ -47,6 +44,7 @@ class Dataset(data.Dataset):
         self.num_scales = num_scales
         self.is_training = is_training
         self.load_depth = load_depth
+        self.load_flow = load_flow
         
         frames = open(frames_file)
         frames = list(frames.readlines()) 
@@ -88,6 +86,7 @@ class Dataset(data.Dataset):
         """
         Arguments:
             filenames.
+
         Returns:
             A list of tensors. Each tensor in the list represents an image snippet (the first element is the target frame, then the source frames) at certain scale. The tensor i has a shape (seq_len, channels, height/2**i, widht/2**i)
             target and source frames at multiple scales.
@@ -133,6 +132,9 @@ class Dataset(data.Dataset):
         load_time = time.perf_counter() - start_all
 
         snippet = [target] + sources
+        snippet_noaug = [target] + sources
+
+        #intrinsics = ...
 
         #print('loading', time.perf_counter() - start)
 
@@ -161,28 +163,44 @@ class Dataset(data.Dataset):
                 snippet[i] = snippet[i].resize((rnd_width, rnd_height), resample=2)
                 snippet[i] = snippet[i].crop((rnd_offsetw, rnd_offseth, rnd_offsetw + self.width, rnd_offseth + self.height))
 
+                snippet_noaug[i] = snippet_noaug[i].resize((rnd_width, rnd_height), resample=2)
+                snippet_noaug[i] = snippet_noaug[i].crop((rnd_offsetw, rnd_offseth, rnd_offsetw + self.width, rnd_offseth + self.height))
+
                 if do_flip:
                     snippet[i] = snippet[i].transpose(Image.FLIP_LEFT_RIGHT)
-
+                    snippet_noaug[i] = snippet_noaug[i].transpose(Image.FLIP_LEFT_RIGHT)
 
         # Multi-scale data
 
-
         ms_snippet = dict()
+        ms_snippet_noaug = dict()
         for i in range(1, self.num_scales):
             size = (self.width//(2**i), self.height//(2**i))
+
             scaled_snippet = []
+            scaled_snippet_noaug = []
+
             for j in range(len(snippet)):
                 tmp = snippet[j].resize(size, resample=2)
                 scaled_snippet.append(func.to_tensor(tmp))
                 scaled_snippet[-1] = func.normalize(scaled_snippet[-1], mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
+                tmp = snippet_noaug[j].resize(size, resample=2)
+                scaled_snippet_noaug.append(func.to_tensor(tmp))
+                scaled_snippet_noaug[-1] = func.normalize(scaled_snippet_noaug[-1], mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+
             ms_snippet[i] = torch.stack(scaled_snippet) 
+            ms_snippet_noaug[i] = torch.stack(scaled_snippet_noaug) 
 
         for i in range(len(snippet)):
             snippet[i] = func.to_tensor(snippet[i]) 
             snippet[i] = func.normalize(snippet[i], mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ms_snippet[0] = torch.stack(snippet)
+
+        for i in range(len(snippet_noaug)):
+            snippet_noaug[i] = func.to_tensor(snippet_noaug[i]) 
+            snippet_noaug[i] = func.normalize(snippet_noaug[i], mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ms_snippet_noaug[0] = torch.stack(snippet_noaug)
 
         # Load depth
         if self.load_depth:
@@ -191,13 +209,25 @@ class Dataset(data.Dataset):
             depth = np.expand_dims(depth, axis=2) 
             depth = func.to_tensor(depth)
 
-            ms_snippet[-1] = depth
+            ms_snippet['depth'] = depth
+
+        if self.load_flow:
+            flow = self.get_flow(index)
+            # resize and format
+            flow = func.to_tensor(flow) # [num_src, 2, h, w]
+            ms_snippet['flow'] = flow
         
         total_time = time.perf_counter() - start_all
         #print("read {:.4f} ({:.2f}%), read + resize: {:.4f} ({:.2f}), getittem {:.4f}".format(read_acc, read_acc/total_time, load_time, load_time/total_time, total_time))
-        return ms_snippet
+        return ms_snippet, ms_snippet_noaug
 
     def get_depth(self, idx):
+        raise NotImplementedError()
+
+    def get_flow(self, idx):
+        raise NotImplementedError()
+
+    def get_intrinsics(self, idx):
         raise NotImplementedError()
 
     def __len__(self):
@@ -215,4 +245,3 @@ if __name__ == "__main__":
             break
 
     print("final time: {:.4}".format(time.perf_counter() - start))
-

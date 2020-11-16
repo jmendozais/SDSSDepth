@@ -1,6 +1,8 @@
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
+from yacs.config import CfgNode as CfgNode
+
 import torch
 import torch.nn.functional as F
 
@@ -25,10 +27,10 @@ def optical_flow_to_rgb(flows):
     rgbs = np.array(rgbs).transpose([0,3,1,2])
     return torch.tensor(rgbs)
 
-def gray_to_rgb(depths, cmap='rainbow'):
+def gray_to_rgb(depths, cmap='rainbow', lb=None, ub=None):
     cm = plt.get_cmap(cmap)
-    mi = depths.min()
-    ma = depths.max()
+    mi = lb if lb is not None else depths.min()
+    ma = ub if ub is not None else depths.max()
     d = ma - mi if ma != mi else 1e-6
     depths = (depths - mi)/d
 
@@ -49,13 +51,17 @@ def denormalize(img):
     #print(img.device, mean.device, std.device)
     return img * std + mean
 
-def human_time(secs):
+def human_time(secs, no_secs=True):
     secs = int(secs)
-    return '{}:{}:{}'.format(secs//3600, (secs%3600)//60, secs%60)
+    if no_secs:
+        return '{}:{}'.format(secs//3600, (secs%3600)//60)
+    else:
+        return '{}:{}:{}'.format(secs//3600, (secs%3600)//60, secs%60)
 
 def any_nan(x):
     return  (x != x).any().item()
 
+'''
 def affine_softplus(x, lo=0, ref=1):
   """Maps real numbers to (lo, infinity), where 0 maps to ref."""
   if not lo < ref:
@@ -66,3 +72,30 @@ def affine_softplus(x, lo=0, ref=1):
   shift = inv_softplus(torch.tensor(1.))
   y = (ref - lo) * torch.nn.Softplus()(x + shift) + lo
   return y
+'''
+
+def cpu_softplus(x):
+    if not isinstance(x, np.ndarray):
+        x = np.asarray(x)
+
+    return np.where(x < 80, np.log(np.exp(x) + 1), x)
+
+def merge_from_dict(config, d):
+    assert isinstance(config) == CfgNode
+    kv = d.keys()
+    vv = d.values()
+
+    l = []
+    for i in range(len(kv)):
+        l.append(kv[i])
+        l.append(vv[i])
+
+    config.merge_from_list(l)
+
+def sigmoid_to_disp_depth(acts, min_depth, max_depth):
+    min_disp = 1 / max_depth
+    max_disp = 1 / min_depth
+    scaled_disp = min_disp + (max_disp - min_disp) * acts
+    depth = 1 / scaled_disp
+
+    return scaled_disp, depth

@@ -8,16 +8,15 @@
 
 #pip uninstall pillow; CC="cc -mavx2" pip install -U --force-reinstall pillow-simd #TODO test SSE4
 
+pip install git+https://github.com/S-aiueo32/lpips-pytorch.git
+
 #PYCLS=../pycls
 #git clone https://github.com/facebookresearch/pycls $PYCLS
 #pip install -r $PYCLS/requirements.txt
 
-pip install git+https://github.com/S-aiueo32/lpips-pytorch.git
-
 #current=$(pwd)
 #cd $PYCLS && python setup.py develop --user
 #cd $current
-
 
 # Prepare dataset
 #python3 ytwalking_download.py --input_file ytwalking_urls.csv

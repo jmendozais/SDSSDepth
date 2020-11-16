@@ -35,33 +35,55 @@ def softmin(x, beta):
    values = F.softmin(beta * x, dim=1)
    return torch.sum(x * values.detach(), dim=1), values
 
+
+def min_and_selection_mask(x, dim=1):
+    ans, idx = torch.min(x, dim=dim)
+    idx = idx.unsqueeze(dim)
+    mask = torch.zeros(x.shape).to(x.device)
+    mask.scatter_(dim, idx, value=1)
+    return ans, mask
+
+
 def get_pooling_op(beta=1):
     if beta == float('inf'):
-        return lambda x: (torch.min(x, dim=1)[0], None)
+        return min_and_selection_mask
     elif beta == 0:
         return lambda x: (torch.mean(x, dim=1), None)
     else:
         return lambda x: softmin(x, beta)
 
+
 def create_norm_op(name, **kwargs):
     if name == 'l1':
-        if kwargs['params_type'] != None:
+        if kwargs['params_type'] != PARAMS_NONE:
             raise Exception("L1 does not support parameters")
         return L1()
 
     elif name == 'laplacian_nll':
         return LaplacianNLL(**kwargs)
 
+    elif name == 'laplacian_nll2':
+        return LaplacianNLL2(**kwargs)
+
+    elif name == 'laplacian_nll3':
+        return LaplacianNLL3(**kwargs)
+
+    elif name == 'laplacian_nll4':
+        return LaplacianNLL4(**kwargs)
+
     else:
         raise NotImplementedError
+
     '''
     elif name == 'charbonnier_nll':
         return CharbonnierNLL(**kwargs)
+
     elif name == 'general_adaptive_nll':
         return GeneralAdaptiveNLL(**kwargs)
     '''
 
-def _temporal_consistency(feats, sampled_feats, residual_op, nonsmoothness='inf', half_mode=False, return_residuals=False):
+
+def _temporal_consistency(feats, sampled_feats, residual_op, nonsmoothness='inf', rec_mode='joint', return_residuals=False):
     '''
     Args:
     )
@@ -78,12 +100,17 @@ def _temporal_consistency(feats, sampled_feats, residual_op, nonsmoothness='inf'
         res = residual_op(feats[i].view(-1, c, h, w), sampled_feats[i].view(-1, c, h, w))
         res = res.view(b, num_recs, h, w)
 
-        if half_mode: 
+        if rec_mode == 'depth': 
             res = res[:,:(num_recs//2),:,:]
-            min_res, idx = pooling(res)
+            min_res, _ = pooling(res)
+        elif rec_mode == 'flow': 
+            res = res[:,(num_recs//2):,:,:]
+            min_res, _ = pooling(res)
         else:
-            min_res, idx = pooling(res)
+            min_res, _ = pooling(res)
+            
         total_loss += (1/(2**i)) * torch.mean(min_res)
+
         if return_residuals:
             res_vec.append(res)
             min_res_vec.append(min_res)
@@ -93,16 +120,18 @@ def _temporal_consistency(feats, sampled_feats, residual_op, nonsmoothness='inf'
     else:
         return total_loss
 
-def color_consistency(imgs, recs, nonsmoothness='inf', flow_ok=True, return_residuals=False):
+
+def color_consistency(imgs, recs, nonsmoothness='inf', rec_mode='joint', return_residuals=False):
     '''
     Args:
       imgs: is a list a batch at multiple scales. Each element of the batch is a target image repeated num_source * 2 times, to consider all of the possible reconstructions using the rigid and dynamic flows. [s,b,2*num_src,3,h,w]
 
       recs: is a list of a batch of reconstruction at multiple scales. Each element of the batch contain the reconstructions from each source frame and flow type. It has the same shape of imgs.
     '''
-    return _temporal_consistency(imgs, recs, residual_op=l1, nonsmoothness=nonsmoothness, half_mode=not flow_ok, return_residuals=False)
+    return _temporal_consistency(imgs, recs, residual_op=l1, nonsmoothness=nonsmoothness, rec_mode=rec_mode, return_residuals=False)
 
-def representation_consistency(results, weight_dc=1, weight_fc=1, weight_sc=1, softmin_beta=0, norm=l1, return_residuals=False):
+
+def representation_consistency(results, weight_dc=1, weight_fc=1, weight_sc=1, softmin_beta=0, norm=L1(), rec_mode='joint', return_residuals=False):
 
     pooling = get_pooling_op(softmin_beta)
     num_scales = len(results.gt_imgs_pyr)
@@ -121,6 +150,7 @@ def representation_consistency(results, weight_dc=1, weight_fc=1, weight_sc=1, s
             depth_res = depth_res.view(batch_size, num_recs//2, h, w)
             depth_res = depth_res.repeat(1, 2, 1, 1)
             depth_res = depth_res.view(-1, 1, h, w)
+            assert depth_res.size() == res.size()
             res += weight_dc * depth_res
 
         if weight_sc > 0:
@@ -129,27 +159,38 @@ def representation_consistency(results, weight_dc=1, weight_fc=1, weight_sc=1, s
             coord_res = coord_res.view(batch_size, num_recs//2, h, w)
             coord_res = coord_res.repeat(1, 2, 1, 1)
             coord_res = coord_res.view(-1, 1, h, w)
+            assert coord_res.size() == res.size()
             res += weight_sc * coord_res
 
         if weight_fc > 0 and i > 0: 
             _, _, fc, _, _ = results.feats_pyr[i-1].size()
-            feat_res = normalized_l1(results.feats_pyr[i-1].view(-1, fc, h, w), results.sampled_feats_pyr[i-1].view(-1, fc, h, w))
+            #feat_res = normalized_l1(results.feats_pyr[i-1].view(-1, fc, h, w), results.sampled_feats_pyr[i-1].view(-1, fc, h, w))
             # stop gradient
-            #feat_res = normalized_l1(results.feats_pyr[i-1].view(-1, fc, h, w).detach(), results.sampled_feats_pyr[i-1].view(-1, fc, h, w).detach())
+            feat_res = normalized_l1(results.feats_pyr[i-1].view(-1, fc, h, w).detach(), results.sampled_feats_pyr[i-1].view(-1, fc, h, w).detach())
             feat_res = feat_res.view(batch_size, num_recs//2, h, w)
             feat_res = feat_res.repeat(1, 2, 1, 1)
             feat_res = feat_res.view(-1, 1, h, w)
+            assert feat_res.size() == res.size()
             res += weight_fc * feat_res
 
         res = res.view(batch_size, num_recs, h, w)
 
+        if rec_mode == 'depth': 
+            res = res[:,:(num_recs//2),:,:]
+        elif rec_mode == 'flow': 
+            res = res[:,(num_recs//2):,:,:]
+
         if results.extra_out_pyr is not None:
-            err = norm(res, results.extra_out_pyr[i])
+            if rec_mode == 'depth': 
+                extra = results.extra_out_pyr[i][:,:(num_recs//2),:,:,:]
+            elif rec_mode == 'flow': 
+                extra = results.extra_out_pyr[i][:,(num_recs//2):,:,:,:]
+            err = norm(res, extra)
         else:
             err = norm(res, scale_idx=i)
 
         min_err, weights = pooling(err)
-
+ 
         # coarser scales have lower weights (inspired by DispNet)
         total_loss += (1/(2**i)) * torch.mean(min_err)
 
@@ -163,43 +204,47 @@ def representation_consistency(results, weight_dc=1, weight_fc=1, weight_sc=1, s
     else:
         return total_loss
 
+
 # Deprecated
-def baseline_consistency(res, weight_dc=1, weight_fc=1, weight_sc=1, color_nonsmoothness='inf', dissimilarity='l1', flow_ok=True, return_residuals=False):
+def baseline_consistency(res, weight_dc=1, weight_fc=1, weight_sc=1, color_nonsmoothness='inf', dissimilarity='l1', rec_mode=True, return_residuals=False):
     if return_residuals:
         raise NotImplementedError
     else: 
         loss_terms = {}
         cc = color_consistency(res.gt_imgs_pyr, res.recs_pyr, 
-                nonsmoothness=color_nonsmoothness, flow_ok=flow_ok, return_residuals=return_residuals)
+                nonsmoothness=color_nonsmoothness, rec_mode=rec_mode, return_residuals=return_residuals)
         loss = cc
         loss_terms['color_cons'] = cc.item()
 
         if weight_dc > 0:
-            dc = weight_dc * _temporal_consistency(res.proj_depths_pyr, res.sampled_depths_pyr, normalized_l1, nonsmoothness=0, return_residuals=return_residuals)
+            dc = weight_dc * _temporal_consistency(res.proj_depths_pyr, res.sampled_depths_pyr, normalized_l1, nonsmoothness=0, rec_mode=rec_mode, return_residuals=return_residuals)
             loss += dc
             loss_terms['depth_cons'] = dc.item()
 
         if weight_fc > 0:
-            fc = weight_fc * _temporal_consistency(res.feats_pyr, res.sampled_feats_pyr, normalized_l1,nonsmoothness=0, return_residuals=return_residuals)
+            fc = weight_fc * _temporal_consistency(res.feats_pyr, res.sampled_feats_pyr, normalized_l1,nonsmoothness=0, rec_mode=rec_mode, return_residuals=return_residuals)
             loss += fc
             loss_terms['feat_cons'] = fc.item()
 
         if weight_sc > 0:
-            sc = weight_sc * _temporal_consistency(res.proj_coords, res.sampled_coords, normalized_l1, nonsmoothness=0, return_residuals=return_residuals)
+            sc = weight_sc * _temporal_consistency(res.proj_coords, res.sampled_coords, normalized_l1, nonsmoothness=0, rec_mode=rec_mode, return_residuals=return_residuals)
             loss += sc
             loss_terms['stru_cons'] = sc.item()
 
     return loss, loss_terms
 
+
 def _gradient_x(img):
     img = F.pad(img, (0,0,0,1), mode='reflect') # todo check the effect of padding on continuity
     return img[:, :, :-1, :] - img[:, :, 1:, :]
+
 
 def _gradient_y(img):
     img = F.pad(img, (0,1,0,0), mode='reflect')
     return img[:, :, :, :-1] - img[:, :, :, 1:]
 
-def exp_gradient(imgs):
+
+def exp_gradient(imgs, num_scales, alpha=1):
     '''
     Args: 
       imgs: a list of tensors containing the snippets at multiple scales, it could have the depth maps as well. Each tensor has a shape [b, s, c, h, w]
@@ -208,12 +253,11 @@ def exp_gradient(imgs):
     '''
     weights_x = []
     weights_y = []
-    num_scales = len(imgs)
-    for i in range(num_scales):
+    for i in range(num_scales): 
         dx = _gradient_x(imgs[i])
         dy = _gradient_y(imgs[i])
-        wx = torch.exp(-torch.mean(torch.abs(dx), dim=1, keepdim=True))
-        wy = torch.exp(-torch.mean(torch.abs(dy), dim=1, keepdim=True))
+        wx = torch.exp(-alpha * torch.mean(torch.abs(dx), dim=1, keepdim=True))
+        wy = torch.exp(-alpha * torch.mean(torch.abs(dy), dim=1, keepdim=True))
         weights_x.append(wx)
         weights_y.append(wy)
 
@@ -223,45 +267,61 @@ def exp_gradient(imgs):
 There are several aspects that can be considered like residual norm, normalization, weighting, and gradient order. The basic conf is l1 norm, no normalization, first order image gradient weighting, and 2nd order gradients.
 '''
 
-def smoothness(data, weights, order=2):
+def smoothness(data, weights, num_scales, order=2):
     '''
     Args:
-      data: a list of tensor containing the data where the smoothness constraint is applied, at multi scales. Each tensor has a shape [b, c, h, w]
+        data: a list of tensor containing the disparity maps where the smoothness 
+        constraint is applied, at one or multi scales. Each tensor has a shape [b, c, h, w]
 
-      weights: a list of tensors containing the weights for each pixel to be smoothed.
+        weights: a list of tensors containing the weights for each pixel to be smoothed.
     '''
+    #print("smoothnes call", len(data), len(weights), num_scales, order)
 
     weights_x, weights_y = weights
-    num_scales = len(data)
     loss = 0
     for i in range(num_scales):
-        batch_size, c, h, w = data[i].size()
         dnx = data[i]
         dny = data[i]
         for j in range(order):
            dnx =  _gradient_x(dnx)
            dny =  _gradient_y(dny)
 
+        # if is just one scale, the weight is 1, if multiple scale, the weight decreases by 2 
         loss += (1/(2**i)) * torch.mean(weights_x[i] * torch.abs(dnx) + weights_y[i] * torch.abs(dny))
 
     return loss
 
-def depth_smoothness(depths, data, order=2):
-    num_scales = len(depths)
-    weights = exp_gradient(data)
 
-    # normalize disparity maps
-    disps = []
-    for i in range(num_scales):
-        disps.append(1.0 / depths[i])
-        disp_mean = torch.mean(disps[i])
-        disps[i] = disps[i] / (disp_mean + 1e-7)
+def disp_smoothness(disps, data, ds_at_level, num_scales, order=2):
+    '''
+    Args:
+        disps: a list of tensors containing the predicted disparity maps at multiple 
+        scales. Each tensor has a shape [batch_size * seq_len, 1, h, w].
+    '''
+    weights = None
+    norm_disps = []
 
-    return smoothness(disps, weights, order)
+    if ds_at_level == -1:
+        weights = exp_gradient(data, num_scales)
 
-def flow_smoothness(flows, data, order=1):
-    num_scales = len(flows)
-    weights_x, weights_y = exp_gradient(data)
+        for i in range(num_scales):
+            disp_mean = torch.mean(disps[i], dim=[2, 3], keepdim=True)
+            norm_disps.append(disps[i] / (disp_mean + 1e-7))
+
+    else:
+        assert ds_at_level >= 0 and ds_at_level < len(disps)
+
+        num_scales = 1
+        weights = exp_gradient([data[ds_at_level]], num_scales)
+
+        disp_mean = torch.mean(disps[ds_at_level], dim=[2, 3], keepdim=True)
+        norm_disps.append(disps[ds_at_level] / (disp_mean + 1e-7))
+
+    return smoothness(norm_disps, weights, num_scales, order)
+
+
+def flow_smoothness(flows, data, num_scales, order=1, alpha=1):
+    weights_x, weights_y = exp_gradient(data, num_scales, alpha)
 
     # repeat weights num_src times
     fweights_x, fweights_y = [], []
@@ -282,10 +342,10 @@ def flow_smoothness(flows, data, order=1):
     # normalize flows
     for i in range(num_scales):
         norm = torch.sum(flows[i] ** 2, 1, keepdim=True)
-        norm = torch.sqrt(norm + 1e-7) # the norm could be -0 (EPS)
+        norm = torch.sqrt(norm + 1e-7) # the norm can not be -0 (EPS)
         flows[i] = flows[i] / norm
     
-    return smoothness(flows, weights=(fweights_x, fweights_y), order=order)
+    return smoothness(flows, weights=(fweights_x, fweights_y), num_scales=num_scales, order=order)
 
 
 def _skew_symmetric(x, batch_size):
@@ -295,6 +355,7 @@ def _skew_symmetric(x, batch_size):
     mat[:,1,2] = -x[:,0]
 
     return mat - torch.transpose(mat, 1, 2)
+
 
 EPIPOLAR_ALGEBRAIC = 0
 EPIPOLAR_SAMPSON = 1
@@ -370,7 +431,5 @@ def LPIPS_loss(gt_imgs, tgt_imgs):
     # normalize to [-1, 1]
     gt_inputs = gt_inputs * 2 - 1
     tgt_inputs = tgt_inputs * 2 - 1
-    print(gt_inputs.min(), gt_inputs.max())
-    print(tgt_inputs.min(), tgt_inputs.max())
 
-    return  lpips_criterion_(gt_inputs, tgt_inputs) 
+    return lpips_criterion_(gt_inputs, tgt_inputs) 

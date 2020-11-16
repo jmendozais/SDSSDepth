@@ -58,11 +58,14 @@ if __name__ == '__main__':
         test_loader = torch.utils.data.DataLoader(test_set, args.batch_size, shuffle=False, num_workers=args.workers, pin_memory=True, drop_last=False)
 
         preds = []
-        for i, data in enumerate(test_loader, 0):
+        for i, data_pair in enumerate(test_loader, 0):
             with torch.no_grad():    
+                data, data_noaug = data_pair
                 inp = data[0].to(args.device)
-                depth, feats = model.depth_net(inp[:,0])
+                outs = model.depth_net(inp[:,0])
+                depth = outs[0]
                 preds.append(depth[0].cpu().numpy())
+
         preds = np.concatenate(preds, axis=0).squeeze(1)
         
         if args.pred_file == None:

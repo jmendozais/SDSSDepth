@@ -93,7 +93,7 @@ def compute_metrics(pred_depths, gt_depths, min_depth, max_depth, scale_factor=N
                 'sq_rel': sq_rel.mean(),
                 'rmse': rms.mean(),
                 'log_rmse': log_rms.mean(),
-                'd1_all': d1_all.mean(),
+                #'d1_all': d1_all.mean(),
                 'a1': a1.mean(),
                 'a2': a2.mean(),
                 'a3': a3.mean()

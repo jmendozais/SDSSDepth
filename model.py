@@ -9,7 +9,8 @@ from torch.utils import model_zoo
 import numpy as np
 
 from data import *
-from net import *
+from net.depth_net import *
+from net.motion_net import *
 from util import any_nan
 
 # Adapted from monodepth2
@@ -21,6 +22,7 @@ class Result:
         self.gt_imgs_pyr = None
 
         self.depths_pyr = [] 
+        self.disps_pyr = [] 
         self.proj_depths_pyr = [] 
         self.sampled_depths_pyr = [] 
         self.tgt_depths_pyr = None
@@ -38,7 +40,7 @@ class Result:
         self.inv_K_pyr = []
 
         self.extra_out_pyr = None
-
+    
 class BackprojectDepth(nn.Module):
     '''
     Explicit batchsize is allowed only on training stage
@@ -62,9 +64,15 @@ class BackprojectDepth(nn.Module):
         self.coords = nn.Parameter(self.coords, requires_grad=False)
 
     def forward(self, depth, inv_K):
+        '''
+        Returns:
+            cam_coords: A tensor containing the camera coordinates. [b, 4, w * h]
+        '''
+
         cam_coords = torch.matmul(inv_K[:,:3,:3], self.coords)
         cam_coords = depth.view(self.batch_size, 1, -1) * cam_coords
         cam_coords = torch.cat([cam_coords, self.ones], 1)
+
         return cam_coords
 
 class ApplyFlow(nn.Module):
@@ -91,7 +99,7 @@ class ApplyFlow(nn.Module):
           flow: a tensor with the optical flow fields with displacements in pixel units. [b, num_src * 2, h, w]
           TODO: Its ok to have displacements in pixel units? it can be normalized to be invariante to the size of the imput?
         Returns:
-          flow coordinates: a tensor of shape [b * num_srcs, 2, h, w] (batch_size = b * num_srcs). 
+          flow coordinates: a tensor of shape [b = bs*num_srcs, 2, -1] (batch_size = b * num_srcs). 
         '''
         return flow.view(self.batch_size, 2, -1) + self.coords
 
@@ -106,10 +114,11 @@ def forward_hook(module, inp, output):
         if not isinstance(out, tuple) and not isinstance(out, list):
             out = [out]
         for j, out2 in enumerate(out):
-            nan_mask = torch.isnan(out2)
-            if nan_mask.any():
-                print("forward hook: Found NaN in", module.__class__.__name__)
-                raise RuntimeError(f"Found NAN in output {i} at indices: ", nan_mask.nonzero(), "where:", out2[nan_mask.nonzero()[:, 0].unique(sorted=True)])
+            if not isinstance(out2, Result):
+                nan_mask = torch.isnan(out2)
+                if nan_mask.any():
+                    print("forward hook: Found NaN in", module.__class__.__name__)
+                    raise RuntimeError(f"Found NAN in output {i} at indices: ", nan_mask.nonzero(), "where:", out2[nan_mask.nonzero()[:, 0].unique(sorted=True)])
             
 
 def backward_hook(module, inp, output):
@@ -122,11 +131,12 @@ def backward_hook(module, inp, output):
     for i, out in enumerate(outputs):
         if not isinstance(out, tuple) and not isinstance(out, list):
             out = [out]
-        for j, grid in enumerate(out):
-            nan_mask = torch.isnan(grad)
-            if nan_mask.any():
-                print("Backward hook: found NaN in output", module.__class__.__name__)
-                raise RuntimeError(f"Found NAN in output {i} at indices: ", nan_mask.nonzero(), "where:", grad[nan_mask.nonzero()[:, 0].unique(sorted=True)])
+        for j, grad in enumerate(out):
+            if not isinstance(grad, Result):
+                nan_mask = torch.isnan(grad)
+                if nan_mask.any():
+                    print("Backward hook: found NaN in output", module.__class__.__name__)
+                    raise RuntimeError(f"Found NAN in output {i} at indices: ", nan_mask.nonzero(), "where:", grad[nan_mask.nonzero()[:, 0].unique(sorted=True)])
 
     if not isinstance(inp, tuple) and not isinstance(inp, list):
         inps = [inp]
@@ -140,14 +150,26 @@ def backward_hook(module, inp, output):
             if grad == None:
                 #print("WARN: None gradient, is it in the inputs?", module.__class__.__name__)
                 continue
-            nan_mask = torch.isnan(grad)
-            if nan_mask.any():
-                print("Backward hookd: found NaN in input", module.__class__.__name__)
-                raise RuntimeError(f"Found NAN in input {i} at indices: ", nan_mask.nonzero(), "where:", grad[nan_mask.nonzero()[:, 0].unique(sorted=True)])
+            if not isinstance(grad, Result):
+                nan_mask = torch.isnan(grad)
+                if nan_mask.any():
+                    print("Backward hookd: found NaN in input", module.__class__.__name__)
+                    raise RuntimeError(f"Found NAN in input {i} at indices: ", nan_mask.nonzero(), "where:", grad[nan_mask.nonzero()[:, 0].unique(sorted=True)])
 
 
 class Model(nn.Module):
-    def __init__(self, batch_size, num_scales, seq_len, height, width, num_extra_channels=0, multiframe_ok=True, learn_intrinsics=False, norm='bn'):
+    def __init__(self, batch_size, num_scales, seq_len, height, width, 
+        multiframe_of=True, 
+        stack_flows=True,
+        num_extra_channels=0, 
+        learn_intrinsics=False, 
+        norm='bn', 
+        depth_backbone='resnet', 
+        flow_backbone='uflow',
+        dropout=0.0, 
+        upscale_pred=False, larger_pose=False, loss_noaug=False,  
+        pred_disp=False, debug=False):
+
         super(Model, self).__init__()
         self.batch_size = batch_size
         self.num_scales = num_scales
@@ -155,12 +177,27 @@ class Model(nn.Module):
         self.height = height
         self.width = width
         self.num_extra_channels = num_extra_channels
+        self.pred_disp = pred_disp
 
-        self.multiframe_ok = multiframe_ok
-        self.motion_seq_len = self.seq_len if self.multiframe_ok else 2
+        # Improvements
+        self.upscale_pred = upscale_pred
+        self.larger_pose = larger_pose
+        self.loss_noaug = loss_noaug
 
-        self.depth_net = DepthNet(norm=norm, width=self.width, height=self.height, num_ext_channels=num_extra_channels)
-        self.motion_net = MotionNet(self.motion_seq_len, self.width, self.height, learn_intrinsics=learn_intrinsics, norm=norm, num_ext_channels=num_extra_channels)
+        self.multiframe_of = multiframe_of
+        self.stack_flows = stack_flows
+
+        self.num_motion_inputs = self.seq_len
+        if self.stack_flows:
+            self.num_motion_inputs = 1
+        else:
+            if self.multiframe_of:
+                self.num_motion_inputs = self.seq_len
+            else:
+                self.num_motion_inputs = 2
+
+        self.depth_net = DepthNet(norm=norm, width=self.width, height=self.height, num_ext_channels=num_extra_channels, backbone=depth_backbone, dropout=dropout, pred_disp=pred_disp)
+        self.motion_net = MotionNet(self.seq_len, self.width, self.height, self.num_motion_inputs, self.stack_flows, learn_intrinsics=learn_intrinsics, norm=norm, num_ext_channels=num_extra_channels, backbone=flow_backbone, dropout=dropout, larger_pose=larger_pose)
 
         self.ms_backproject = nn.ModuleList()
         self.ms_applyflow = nn.ModuleList()
@@ -173,16 +210,43 @@ class Model(nn.Module):
         # Create depth, pose and flow nets
         # Sent model to devices
         # add parameters pytorch logic
-        #for submodule in self.modules():
-        #    submodule.register_forward_hook(forward_hook)
-        #    submodule.register_backward_hook(backward_hook)
+        if debug == True:
+            for submodule in self.modules():
+                if not isinstance(submodule, Model):
+                    submodule.register_forward_hook(forward_hook)
+                    submodule.register_backward_hook(backward_hook)
 
 
-    def forward(self, inputs):
+    def prepare_motion_input(self, inputs):
+
+        batch_size = len(inputs[0]) # train/test bs may differ
+
+        if self.stack_flows:
+
+            if self.multiframe_of:
+                motion_ins = inputs[0].view(batch_size, -1, self.height, self.width)
+
+            else:
+                for i in range(batch_size):
+                    for j in range(1, self.seq_len):
+                        motion_ins.append(torch.cat([inputs[0][i,0], inputs[0][i,j]], axis=0))
+
+                motion_ins = torch.stack(motion_ins) # [bs*(seq_len-1), 2*3, h, w]
+
+        else:                
+            # stack images in batch dimension for feature extraction
+
+            # its independent of multiframe_of
+
+            motion_ins = inputs[0].view(-1, 3, self.height, self.width) # [bs*seq_len, 3, h, w]
+
+        return motion_ins
+
+    def forward(self, inputs, inputs_noaug):
         '''
         Args:
           inputs: A dict of tensors with entries(i, x) where i is the scale in [0,num_scales), and x is a batch of image snippets at the i-scale. res.The first element of the snippet is the target frame, then the source frames. The tensor i has a shape [b,seq_len,c, h/2**i, w/2**i].
-
+elf
         Returns:
           tgt_img_pyt: a list of tensors. Each tensor has batch of target images repeated by the number of source frame considered, duplicated to consider rigid and optical flow based reconstruction. Each tensor has a shape [b, 2*num_src, 3, h, w].
 
@@ -197,29 +261,24 @@ class Model(nn.Module):
         # Preparing inputs for predicting
         batch_size = len(inputs[0]) # train/test bs may differ
         imgs = inputs[0].view(-1, 3, self.height, self.width)
-        motion_ins = []
-        if self.multiframe_ok:
-            motion_ins = inputs[0].view(batch_size, -1, self.height, self.width)
-        else:
-            for i in range(batch_size):
-                for j in range(1, self.seq_len):
-                    motion_ins.append(torch.cat([inputs[0][i,0], inputs[0][i,j]], axis=0))
-            motion_ins = torch.stack(motion_ins)
+        motion_ins = self.prepare_motion_input(inputs)
 
+        # Predicting depth and optical flow maps
         res = Result()
         if self.num_extra_channels:
-            res.depths_pyr, extra_depth_pyr, depth_feats = self.depth_net(imgs)
+            res.depths_pyr, res.disps_pyr, extra_depth_pyr, depth_feats = self.depth_net(imgs)
             res.ofs_pyr, extra_ofs_pyr, res.T, res.K_pyr = self.motion_net(motion_ins)
 
             res.extra_out_pyr = []
         else:
-            res.depths_pyr, depth_feats = self.depth_net(imgs)
+            res.depths_pyr, res.disps_pyr, depth_feats = self.depth_net(imgs)
             res.ofs_pyr,  res.T, res.K_pyr = self.motion_net(motion_ins)
 
+        # TODO check consistency with new flow modality
         res.inv_K_pyr = []
         for i in range(self.num_scales):
             inv_K = torch.inverse(res.K_pyr[i]) 
-            if  self.multiframe_ok:
+            if  self.multiframe_of:
                 K = torch.unsqueeze(res.K_pyr[i], 1).repeat(1, self.seq_len - 1, 1, 1, 1)
                 K = K.view(batch_size * (self.seq_len - 1), 4, 4)
                 res.K_pyr[i] = K
@@ -229,18 +288,7 @@ class Model(nn.Module):
 
             res.inv_K_pyr.append(inv_K)
         
-        # reconstructed images at multiple scales
-        '''
-        res.tgt_imgs_pyr = []
-        res.recs_pyr = []
-        res.proj_depths_pyr = []
-        res.sampled_depths_pyr = []
-        res.proj_coords_pyr = []
-        res.sampled_coords_pyr = []
-        res.feats_pyr = []
-        res.sampled_feats_pyr = []
-        '''
-
+        # reconstruct depth at each scale
         for i in range(self.num_scales):
             bs_seq, _, h, w = res.depths_pyr[i].size()
 
@@ -280,7 +328,11 @@ class Model(nn.Module):
                 tgt_feats = tgt_feats.repeat(1, (self.seq_len - 1), 1, 1).reshape(-1, num_maps, h2, w2)
                 src_feats = torch.stack(src_feats).view(-1, num_maps, h2, w2) 
 
-            src_imgs = inputs[i][:, 1:self.seq_len]
+            if self.loss_noaug:
+                src_imgs = inputs_noaug[i][:, 1:self.seq_len]
+            else:
+                src_imgs = inputs[i][:, 1:self.seq_len]
+
             src_imgs = src_imgs.reshape(-1, 3, h, w)
 
             # reconstruct with the rigid flow
@@ -317,7 +369,10 @@ class Model(nn.Module):
             #flow_rec.append(self.grid_sample(src_imgs, src_pix_coords))
             res.recs_pyr.append(torch.cat([rigid_rec, flow_rec], axis=1))
             # reconstruct with a large
-            tgt_imgs = F.interpolate(inputs[i][:,0], size=(h, w), mode='bilinear', align_corners=False)
+            if self.loss_noaug:
+                tgt_imgs = F.interpolate(inputs_noaug[i][:,0], size=(h, w), mode='bilinear', align_corners=False)
+            else:
+                tgt_imgs = F.interpolate(inputs[i][:,0], size=(h, w), mode='bilinear', align_corners=False)
 
             #tgt_imgs = torch.unsqueeze(tgt_imgs, 1)
             #tgt_imgs = tgt_imgs.expand(b, self.seq_len - 1, 3, h, w)
@@ -358,9 +413,9 @@ class Model(nn.Module):
             mask = torch.logical_and(pix_coords[:,:,:,0] > -1, pix_coords[:,:,:,1] > -1)
             mask = torch.logical_and(mask, pix_coords[:,:,:,0] < 1)
             mask = torch.logical_and(mask, pix_coords[:,:,:,1] < 1)
-            return F.grid_sample(imgs, pix_coords, padding_mode='border'), mask
+            return F.grid_sample(imgs, pix_coords, padding_mode='border', align_corners=False), mask # Mondepth2 used the default of old pytorch: align corners = true
         else:
-            return F.grid_sample(imgs, pix_coords, padding_mode='border')
+            return F.grid_sample(imgs, pix_coords, padding_mode='border', align_corners=False)
 
 def test_model():
     height=64#128
@@ -368,7 +423,7 @@ def test_model():
     num_scales=4
     seq_len=3
     batch_size=2
-    train_set = MovingExp('./data/moving_exp/sample/ytwalking_frames', './data/moving_exp/sample/ytwalking_frames/clips.txt', height=height, width=width, num_scales=num_scales, seq_len=seq_len)
+    train_set = Dataset('./data/moving_exp/sample/ytwalking_frames', './data/moving_exp/sample/ytwalking_frames/clips.txt', height=height, width=width, num_scales=num_scales, seq_len=seq_len)
 
     train_loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=2, pin_memory=True, drop_last=True)
 
@@ -376,7 +431,7 @@ def test_model():
 
     for i, data in enumerate(train_loader, 0):
         with torch.no_grad():
-            imgs, recs = model(data)
+            _ = model(data)
             break
 
 def imshow(img):

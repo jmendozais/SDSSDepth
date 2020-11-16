@@ -27,8 +27,12 @@ import pycls.core.checkpoint as checkpoint
 from pycls.models.regnet import RegNet
 from pycls.models.anynet import get_stem_fun
 
-from util import any_nan
+from util import *
 from normalization import *
+
+ARCH_REGNET = 0
+ARCH_RESNET = 1
+ARCH_EFFNET = 2
 
 class MultiInputEfficientNet(EfficientNet):
 
@@ -128,7 +132,7 @@ class MultiInputResNet(models.ResNet):
 
 
     @classmethod
-    def from_pretrained(num_inputs=1, pretrained=False):
+    def from_pretrained(cls, num_inputs=1, pretrained=False):
         blocks = [2, 2, 2, 2]
         block_type = models.resnet.BasicBlock
         model = MultiInputResNet(block_type, blocks, num_inputs=num_inputs)
@@ -300,10 +304,10 @@ class CustomDecoder(nn.Module):
     def forward(self, feats):
         '''
         Args
-        feats: contains the feature maps on the encoder that are also skipt connections. The first feature maps correspond to the first layers on the encoder network. Each feature maps has the shape [batch_size, channels, width, heigh].
+            feats: contains the feature maps on the encoder that are also skipt connections. The first feature maps correspond to the first layers on the encoder network. Each feature maps has the shape [batch_size, channels, width, heigh].
 
         Returns
-        out: A list of tensors. The i-th element of the list contains a tensor with the outputs at the scale i.
+            out: A list of tensors. The i-th element of the list contains a tensor with the outputs at the scale i.
         '''
         out = []
         x = feats[-1] 
@@ -321,214 +325,307 @@ class CustomDecoder(nn.Module):
         out.reverse()
         return out
 
-class DepthNet(nn.Module):
+class UFlowEncoder(nn.Module):
 
-    def __init__(self, pretrained=True, norm='bn', height=-1, width=-1, num_ext_channels=0):
-        '''
-        loss_params: number of parameter per pixel
-        '''
-        super(DepthNet, self).__init__()
-        self.num_ext_channels = num_ext_channels
-        #self.enc = MultiInputResNetEncoder(num_inputs=1, pretrained=pretrained)
-        #self.enc = MultiInputEfficientNetEncoder(num_inputs=1, pretrained=pretrained)
-        self.enc = MultiInputRegNetEncoder(num_inputs=1, pretrained=pretrained, norm=norm, height=height, width=width)
-        '''
-        Activation functions and depth range. Current implementations use sigmoid activations and bound depth values in a range (i.e. monodepth2 0.1 - 100). 
-        Activation scaling. Most depth estimation network scale the disp outputs by a factor (numerical stability)
-        TODO: If softplus without bounding outputs and scaling do not work, try softplus + scaling or sigmoid + scaling + bounding (it should work, depth-in-theworld paper)
-        ''' 
-        # TODO: 
-        self.dec = CustomDecoder(self.enc.num_ch_skipt, num_ch_out=1 + num_ext_channels)
+    def __init__(self):
+        super(UFlowEncoder, self).__init__()
 
-    def forward(self, inputs):
+        self.levels = 5
+
+        self.filters = [(3, 32)] * self.levels
+        self.num_ch_skipt = [nf for nl, nf in self.filters]
+
+        self.blocks = nn.ModuleList()
+        self.lrelu = nn.LeakyReLU(0.1, inplace=True)
+
+        in_channels = 3
+
+        for num_layers, num_filters in self.filters:
+            module = []
+
+            for i in range(num_layers):
+                stride = 1
+                if i == 0:
+                    stride = 2
+
+                module.append(nn.Conv2d(in_channels, num_filters, kernel_size=3, stride=stride, padding=1))
+                module.append(self.lrelu)
+                in_channels = num_filters
+
+            self.blocks.append(nn.Sequential(*module))
+
+            # TODO: initializations
+
+    def forward(self, x):
         '''
-        Returns:
-            depths: A list of tensors with the depth maps at multiple-scales. Each tensor has as shape [bs*seq_len, 1, h, w]
-            extra: A list of tensors with the extra values predicted for each pixel. Each tensor has a shape [bs*seq_len, num_parms, h, w]
-            enc_feats: A list of the feature maps of the depth encoder
+            Args:
+                x: a tensor containing the all the images in a batch. [bs * seq_len, h, w, c]
+
         '''
-        enc_feats = self.enc(inputs)
-        outs = self.dec(enc_feats)
+        feats = []
 
-        depths = []
-        extra = []
-        for i in range(len(outs)):
-            outs[i] = outs[i] + 1e-6 # TODO: check if it solves the NaN problem
-            if self.num_ext_channels:
-                depths.append(F.softplus(outs[i][:,:1,:,:]))
-                extra.append(outs[i][:,1:,:,:])
-        
-        if self.num_ext_channels:
-            return depths, extra, enc_feats
-        else:
-            return outs, enc_feats
+        for block in self.blocks:
+            x = block(x)
+            feats.append(x)
 
+        return feats
 
-class IntrinsicsDecoder(nn.Module):
+def flow_to_warp(flow):
     '''
-    This decoder estimates the intrinsic parameters from the bottleneck features of the motion deocder. We estimate the focal distances (fx, fy) and assume the the principal point is located at the center of the image. TODO: For generalization on diverse cameras, evaluate if its also required to estimate the principal point.
+    Args:
+        flow: A tensor of shape [b, 2, h, w]. the coordinates 
+
+    Returns:
+        A tensor containing the sum of grid + flow. []
     '''
-    def __init__(self, height, width, num_in_ch):
-        super(IntrinsicsDecoder, self).__init__()
+
+    b, _, h, w = flow.size()
+
+    # TODO: memo default grid
+    hor = torch.linspace(0, w - 1, w).view(1, 1, 1, -1).expand(-1, -1, h, -1)
+    ver = torch.linspace(0, h - 1, h).view(1, 1, -1, 1).expand(-1, -1, -1, w)
+    grid = torch.cat([hor, ver], dim=1)
+
+    grid = grid.to(flow.device)
+
+    return grid + flow
+
+def grid_sample(x, pix_coords):
+    '''
+    pix_coords is the warp
+    '''
+
+    # normalized coords
+    # normalized flows
+    _, _, h, w = x.size()
+    pix_coords = pix_coords.permute(0, 2, 3, 1)
+    pix_coords[:,:,:,0] /= (w - 1)
+    pix_coords[:,:,:,1] /= (h - 1)
+    pix_coords = (pix_coords - 0.5) * 2
+
+    # Alternative: zero out the input values at invalid coordinates
+
+    return F.grid_sample(x, pix_coords, padding_mode='border', align_corners=False)
+
+
+def upsample(x, scale_factor=2, is_flow=False):
+
+    _, _, h, w = x.size()
+    x = F.upsample(x, scale_factor=scale_factor, mode='bilinear')
+
+    if is_flow: 
+        x *= scale_factor
+
+    return x
+
+
+class UFlowDecoder(nn.Module):
+
+    def __init__(self, same_resolution=True, num_ch_out=2):
+        super(UFlowDecoder, self).__init__()
+
+        self.same_resolution = same_resolution
+        self.levels = 5
+        self.max_displacement = 4
+        self.num_ch_out = num_ch_out
+        self.num_upsample_ctx_channels = 32
+        self.num_feats_channels = [3] + [32] * self.levels
+
+        self.lrelu = nn.LeakyReLU(0.1, inplace=True)
+
+        self.flow_blocks = self._build_flow_models()
+        self.upsample_context_layers = self._build_upsample_context_layers()
+        self.refinement_model = self._build_refinement_model()
         
-        self.height = height
-        self.width = width
+        # todo initializations
 
-        tmp = []
-        tmp.append(nn.Conv2d(num_in_ch, 2, 1))
-        tmp.append(nn.Softplus())
-        self.model = nn.Sequential(*tmp)
-    
-    def forward(self, inputs):
-        '''
-        Args:
-          inputs: contains the bottleneck features of the motion encoder. Its shape is [b,c,1,1]. The bottleneck may contain the features of a pair or a snippet. There is one output for each pair or snippet in the batch.
+    def _build_refinement_model(self):
+        layers = []
+        conv_params = [(128, 1), (128, 2), (128, 4), (96, 8), (64, 16), (32, 1)]
 
-        Returns:
-          a tensor of shape [b, 4, 4]. It contains the intrinsic parameters: focal distances (fx, fy) of the offset (ox, oy) (by default at the mid of the frame)
-        '''
-        intr = self.model(inputs)
+        in_channels = self.flow_model_channels[-1] + self.num_ch_out
+        for c, d in conv_params:
+            layers.append(nn.Conv2d(in_channels, c, kernel_size=3, stride=1, 
+                padding=d, dilation=d))
+            layers.append(self.lrelu)
+            in_channels = c
 
-        b = inputs.size(0)
+        layers.append(nn.Conv2d(in_channels, self.num_ch_out, kernel_size=3, stride=1, padding=1))
 
-        ones = torch.ones_like(intr).to(inputs.device)
-        diag_flat = torch.cat([intr, ones], axis=1)
-
-        K = torch.diag_embed(torch.squeeze(diag_flat))
-
-        K[:,0,2] = 0.49
-        K[:,1,2] = 0.49
-        K[:,0,:] *= self.width
-        K[:,1,:] *= self.height
-        return K
+        return nn.Sequential(*layers)
 
 
-class PoseDecoder(nn.Module):
+    def _build_flow_models(self):
+        self.flow_model_channels = [128, 128, 96, 64, 32]
+        cost_volume_channels = (2 * self.max_displacement + 1) ** 2
 
-    def __init__(self, num_src, num_in_ch):
-        super(PoseDecoder, self).__init__()
-        self.num_src = num_src
+        blocks = nn.ModuleList()
 
-        tmp = []
-        tmp.append(nn.Conv2d(num_in_ch, 6*self.num_src, 1))
-        self.model = nn.Sequential(*tmp)
+        lowest_level = 0 if self.same_resolution else 2
+        # if no same resolution levels belong to [self.levels, 2]
+        # otherwise [self.levels, 2]
+        for level in range(self.levels, lowest_level - 1, -1): # input is a level i, output at level i - 1
+            layers = nn.ModuleList()
 
-    def forward(self, inputs):
-        '''
-        Args:
-          inputs: A batch of snippet representations [bs * num_src, num_in_ch]
-        Returns:
-          
-          A tensor of shape [bs * num_src, 4, 4]. It has the relative camera motion between snippet[i,0] ans snippet[i,j+1]
-        '''
-        batch_size = inputs.size(0)
-        outs = self.model(inputs)
-        outs = outs.view(batch_size * self.num_src, 6) * 0.01
+            in_channels = 0
 
-        r = torch.squeeze(outs[:,:3])
-        R = transforms3D.euler_angles_to_matrix(r, convention='XYZ')
-        t = outs[:,3:].view(-1, 3, 1)
-        T = torch.cat([R, t], axis=2)
-        last_row = torch.zeros((batch_size * self.num_src, 1, 4))
-        last_row[:,0,3] = torch.ones((1,))
-        last_row = last_row.to(inputs.device)
+            # no features neither cost volume at level 0
+            if level > 0:
+                in_channels += cost_volume_channels
+                in_channels += self.num_feats_channels[level] 
 
-        #tmp = torch.eye(4)
-        #tmp = tmp.unsqueeze(0).expand(batch_size * self.num_src, 4, 4)
-        return torch.cat([T, last_row], axis=1)
-         
+            if level < self.levels:
+                in_channels += self.num_ch_out
+                in_channels += self.num_upsample_ctx_channels # feat up dimensions
 
-class MotionNet(nn.Module):
-
-    def __init__(self, seq_len, width, height, pretrained=True, learn_intrinsics=False, norm='bn', num_ext_channels=0):
-        super(MotionNet, self).__init__()
-
-        self.width = width
-        self.height = height
-        self.seq_len = seq_len
-        self.num_ext_channels = num_ext_channels
-
-        #self.enc = MultiInputResNetEncoder(num_inputs=2, pretrained=pretrained)
-        #self.enc = MultiInputEfficientNetEncoder(num_inputs=self.seq_len, pretrained=pretrained)
-        self.enc = MultiInputRegNetEncoder(num_inputs=self.seq_len, pretrained=pretrained, norm=norm, height=self.height, width=self.width)
-
-        bottleneck_dim = self.enc.num_ch_skipt[-1]
-        self.in_dec = IntrinsicsDecoder(self.height, self.width, bottleneck_dim)
-        self.pose_dec = PoseDecoder(self.seq_len - 1, bottleneck_dim)
-
-        self.of_dec = CustomDecoder(self.enc.num_ch_skipt, num_ch_out=(2 + self.num_ext_channels)*(self.seq_len - 1)) 
-
-        self.bottleneck = None
-
-        # TODO: remove
-        self.learn_intrinsics = learn_intrinsics 
-
-    def forward(self, inputs):
-        '''
-        Args: 
-          if multiframe_ok the tensor has a shape shape [b, 3*seq_len, h, w]l
-          otherwise we assume a tensor with frame pairs with shape [b*num_src, 3*2, h, w), num_src = seq_len - 1
-
-        Returns:
-          ofs_pyr: 
-            A list of tensors with multi-scale flow predictions. Each tensor has a shape [b * num_src, 2, h, w]. if multiframe_ok num_srcs is equal to the number of sources framesof the input snippets, otherwise num_srcs is 1.
-
-          pose: 
-            a tensor of shape [b,4,4] with the relative pose parameters a SO(3) transform.
-
-          intrinsics: 
-            a tensor of shape [b,4,4] with the intrinsic matrix.
-        
-          extra_pyr:
-            A list of tensors with parameters predicted for each pixel at multi-scales. Ech tensor has a shape [b*num_src, num_params, h, w]
-        '''
-        feats = self.enc(inputs)
-
-        outs = self.of_dec(feats)
-        num_scales = len(outs)
-
-        ofs_pyr = []
-        exts_pyr = []
-
-        for i in range(num_scales):
-            b, _, h, w = outs[i].size()
-            outs[i] = outs[i].view(b * (self.seq_len - 1), 2 + self.num_ext_channels, h, w)
-
-            ofs_pyr.append(outs[i][:, :2])
-            exts_pyr.append(outs[i][:, 2:])
-
-        self.bottleneck = F.adaptive_avg_pool2d(feats[-1], (1,1))
-        T = self.pose_dec(self.bottleneck)
-
-        if self.learn_intrinsics:
-            K = self.in_dec(self.bottleneck)
-        else:
-            intr = torch.Tensor([[0.58, 1.92]]*b).to(inputs.device)
-            ones = torch.ones_like(intr).to(inputs.device)
-            diag_flat = torch.cat([intr, ones], axis=1)
-
-            K = torch.diag_embed(torch.squeeze(diag_flat))
-
-            K[:,0,2] = 0.49
-            K[:,1,2] = 0.49
-            K[:,0,:] *= self.width
-            K[:,1,:] *= self.height
- 
-        K_pyr = [K]
-        for i in range(1, num_scales):
-            tmp = K.clone()
-            tmp[:,0] /= (2**i)
-            tmp[:,1] /= (2**i)
-
-            K_pyr.append(tmp)
+            for c in self.flow_model_channels:
+                conv = nn.Conv2d(in_channels, c, kernel_size=3, stride=1, padding=1)
+                in_channels += c # += address dense connections
+                layers.append(nn.Sequential(conv, self.lrelu))
             
-        # ie_dec model does not produce multi-scale outputs, does it need to compute the multiscale intrinsics and extrinsics.
-        if self.num_ext_channels:
-            return ofs_pyr, exts_pyr, T, K_pyr
-        else:
-            return ofs_pyr, T, K_pyr
+            layers.append(nn.Conv2d(self.flow_model_channels[-1], self.num_ch_out, kernel_size=3, stride=1, padding=1))
 
-#encoder = MultiInputEfficientNetEncoder(num_inputs=2)
-#net = MultiInputEfficientNet.from_pretrained('efficientnet-b0', num_inputs=2)
-#net = EfficientNet.from_pretrained('efficientnet-b0', in_channels=6)
+            blocks.insert(0, layers)
 
+        if not self.same_resolution:
+            blocks.insert(0, None)
+            blocks.insert(0, None)
+        
+        return blocks
+
+            
+    def _build_upsample_context_layers(self):
+        in_context_channels = self.flow_model_channels[-1] # Consider accumulations TODO
+        assert in_context_channels == 32 # Remove
+
+        out_context_channels = self.num_upsample_ctx_channels
+
+        layers = nn.ModuleList()
+        layers.append(None)
+        for _ in range(self.levels):
+            layers.append(nn.ConvTranspose2d(in_channels=in_context_channels, out_channels=out_context_channels, kernel_size=4, stride=2, padding=1))
+
+        return layers
+
+
+    def normalize_features(self, feats):
+        means = []
+        stds = []
+        for feat in feats:
+            # normalize across images and channels
+            std, mean = torch.std_mean(feat)
+            means.append(mean)
+            stds.append(std)
+
+        #  normalize across all images
+        mean = torch.mean(torch.stack(means))
+        std = torch.mean(torch.stack(stds))
+
+        normalized_feats = [(feats[i] - mean) / (std + 1e-16) for i in range(len(feats))]
+
+        return normalized_feats
+
+
+    def compute_cost_volume(self, feats1, feats2):
+        # something
+        _, _, h, w = feats2.size()
+        num_shifts = 2 * self.max_displacement + 1
+
+        feats2_padded = F.pad(feats2, pad=(self.max_displacement, self.max_displacement, self.max_displacement, self.max_displacement), mode='constant')
+
+        cost_list = []
+        for i in range(num_shifts):
+            for j in range(num_shifts):                       
+                corr = torch.mean(feats1 * feats2_padded[:,:,i:i + h, j:j + w], dim=1, keepdim=True)
+                cost_list.append(corr)
+
+        cost_volume = torch.cat(cost_list, dim=1)
+
+        return cost_volume
+
+
+    def forward(self, feat_pyr1, feat_pyr2):
+        '''
+        Args:
+            feat_pyr1: A list of tensors containing the feature pyramid for the target frames. 
+            Each tensor has a shape [bs * nsrc, f, h_i, w_i]
+
+            feat_pyr2: A list of tensors containing the feature pyramid for the source frames. 
+            Each tensor has a shape [bs * nsrc, f, h_i, w_i]
+
+        Returns:
+            outs: A list of tensors containing the predicted optical flows as different resolutions.
+            Each tensor as a shape [bs * nsrc, 2, h_i, w_i]
+
+        '''
+        flow_extra_up = None
+        context_up = None
+
+        flow_extra_pyr = []
+
+        # Here we do not consider the features at level 1 because the output size 
+        # is four time smaller than the original resolution.
+        last_level = 0 if self.same_resolution else 2
+
+        feat_pyr1.insert(0, None)
+        feat_pyr2.insert(0, None)
+
+        # paper [5, 4, 3, 2]
+        # same resolution [5, 4, 3, 2, 1, 0]
+
+        for level, (feats1, feats2) in reversed(
+            list(enumerate(zip(feat_pyr1, feat_pyr2)))[last_level:]):
+
+            # Prepare flow model inputs
+            ins = []
+
+            if context_up is not None:
+                ins.append(context_up)
+
+            if flow_extra_up is not None: 
+                ins.append(flow_extra_up)
+
+            # Compute cost volume
+            if feats2 is not None:
+                if flow_extra_up is None:
+                    warped2 = feats2
+                else:
+                    flow_up = flow_extra_up[:,:2]
+                    warp_up = flow_to_warp(flow_up)
+                    warped2 = grid_sample(feats2, warp_up)
+        
+                feats1_normalized, warped2_normalized = self.normalize_features([feats1, warped2])
+
+                cost_volume = self.compute_cost_volume(feats1_normalized, warped2_normalized)
+                cost_volume = self.lrelu(cost_volume)
+
+                ins.append(cost_volume)
+                ins.append(feats1) 
+
+            ins = torch.cat(ins, dim=1) 
+
+            # Predict optical flow and context
+            for layer in self.flow_blocks[level][:-1]:
+                out = layer(ins)
+                ins = torch.cat([ins, out], dim=1)
+
+            context = out
+            flow_extra = self.flow_blocks[level][-1](context)
+
+            # Prepare flow and context for the next level
+            if flow_extra_up is not None:
+                flow_extra[:,:2] += flow_extra_up[:,:2]
+
+            if level > 0:
+                flow_extra_up = upsample(flow_extra, is_flow=True)
+                context_up = self.upsample_context_layers[level](context)
+
+            flow_extra_pyr.append(flow_extra)
+        
+        refinement = self.refinement_model(torch.cat([context, flow_extra], dim=1))
+        refined_extra = refinement
+        refined_extra[:,:2] += flow_extra[:,:2]
+        flow_extra_pyr[-1] = refined_extra
+
+        return list(reversed(flow_extra_pyr))
+        
