@@ -57,7 +57,5 @@ class BaseNetTest(absltest.TestCase):
 
         assert h_in == h and w_in == w
 
-
-
 if __name__ == '__main__':
     absltest.main()

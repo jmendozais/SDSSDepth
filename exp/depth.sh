@@ -1,4 +1,4 @@
-#!/bin/bash  -i
+#!/bin/bash -i
 BASH_ENV="~/.bashrc"
 
 # 1. Experiment Design
@@ -11,8 +11,11 @@ BASH_ENV="~/.bashrc"
 # Depth constrained to a range [0.1 - 100]
 # Data augmentation only to fed the networks, not for the loss
 
-DATADIR='/data/ra153646/robustness'
-CONTAINER='41e541473596'
+#DATADIR='/data/ra153646/robustness' # dlm
+DATADIR=$(pwd)/out # liv
+
+#CONTAINER='41e541473596' # dlm
+CONTAINER='11ff68d7e45f' # bezier
 
 avgrep_depth_regnet() {
 dev=2
@@ -60,8 +63,11 @@ dev=0
 #ename=robustv2-it2-depth-only-avg-rep-lr1e-5-resnet-ds5e-2-lpose-pdisp
 #c="CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --pred-disp --larger-pose --log ${DATADIR}/$ename --loss l1 --backbone resnet --weight-ds 5e-2 -b 12 --epoch 20 -l 1e-5 --rec-mode depth --rep-cons --softmin-beta 0 --norm bn --weight-ofs 0 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 &>$(pwd)/log/$ename.txt; CUDA_VISIBLE_DEVICES=$dev python $(pwd)/eval_depth.py -c ${DATADIR}/$ename/best_model_val.tar -i $(pwd)/data/kitti/test_files_eigen.txt --single-scalor --predict --measure &>>$(pwd)/log/$ename.txt"
 
-ename=robustv2-it2-depth-only-avg-rep-lr1e-5-resnet-ds5e-2-lpose-pdisp-lnoaug
-d="CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --larger-pose --pred-disp --loss-noaug --log ${DATADIR}/$ename --loss l1 --backbone resnet --weight-ds 5e-2 -b 12 --epoch 20 -l 1e-5 --rec-mode depth --rep-cons --softmin-beta 0 --norm bn --weight-ofs 0 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 &>$(pwd)/log/$ename.txt; CUDA_VISIBLE_DEVICES=$dev python $(pwd)/eval_depth.py -c ${DATADIR}/$ename/best_model_val.tar -i $(pwd)/data/kitti/test_files_eigen.txt --single-scalor --predict --measure &>>$(pwd)/log/$ename.txt"
+#ename=robustv2-it2-depth-only-avg-rep-lr1e-5-resnet-ds5e-2-lpose-pdisp-lnoaug
+#d="CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --larger-pose --pred-disp --loss-noaug --log ${DATADIR}/$ename --loss l1 --backbone resnet --weight-ds 5e-2 -b 12 --epoch 20 -l 1e-5 --rec-mode depth --rep-cons --softmin-beta 0 --norm bn --weight-ofs 0 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 &>$(pwd)/log/$ename.txt; CUDA_VISIBLE_DEVICES=$dev python $(pwd)/eval_depth.py -c ${DATADIR}/$ename/best_model_val.tar -i $(pwd)/data/kitti/test_files_eigen.txt --single-scalor --predict --measure &>>$(pwd)/log/$ename.txt"
+
+ename=robustv2-it2-depth-only-avg-rep-lr1e-5-resnet-ds5e-2-lpose-pdisp-vismask
+d="CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --pred-disp --larger-pose --log ${DATADIR}/$ename --loss l1 --weight-ds 5e-2 -b 12 --epoch 20 -l 1e-5 --rec-mode depth --rep-cons --softmin-beta 0 --norm bn --weight-ofs 0 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 &>$(pwd)/log/$ename.txt; CUDA_VISIBLE_DEVICES=$dev python $(pwd)/eval_depth.py -c ${DATADIR}/$ename/best_model_val.tar -i $(pwd)/data/kitti/test_files_eigen.txt --single-scalor --predict --measure &>>$(pwd)/log/$ename.txt"
 
 echo "$d"
 ded $CONTAINER "$d"

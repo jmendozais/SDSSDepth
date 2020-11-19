@@ -42,7 +42,7 @@ class DatasetMock(data.Dataset):
 
 class ModelTest(absltest.TestCase):
 
-    def _get_model(self, device='cpu'):
+    def _get_model(self, device='cpu', batch_size=2):
         seq_len = 3
         height = 128
         width = 416
@@ -58,7 +58,7 @@ class ModelTest(absltest.TestCase):
         norm_op.to(device)
 
         model_ = model.Model(
-            batch_size=2,
+            batch_size=batch_size,
             num_scales=4,
             seq_len=seq_len, 
             height=height, 
@@ -97,10 +97,10 @@ class ModelTest(absltest.TestCase):
         _ = model(batch, batch)
 
     def test_gpu_memo(self):
-        model = self._get_model()
+        model = self._get_model(batch_size=12)
         dataset = DatasetMock(model.seq_len, model.height, model.width)
         dataloader = torch.utils.data.DataLoader(dataset, 
-            batch_size=12, 
+            batch_size=model.batch_size, 
             shuffle=True, 
             num_workers=0, 
             pin_memory=True, 
@@ -110,6 +110,7 @@ class ModelTest(absltest.TestCase):
         batch = next(it)
            
         res = model(batch, batch)
+        model = model.cuda()
 
         #loss = compute_loss(res, something)
 

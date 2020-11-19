@@ -1,6 +1,6 @@
 #!/bin/bash  -i
 BASH_ENV="~/.bashrc"
-DATADIR='/data/ra153646/robustness'
+DATADIR=$(pwd)/out #'/data/ra153646/robustness'
 
 #ename=debug-epipolar-detach
 #CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename -b 2 --weight-ds 1e-1 --weight-ofs 1e-2 --weight-ec 1 --ec-mode 'samp' --weight-dc 0 --weight-fc 0 --weight-sc 1 --weight-pl 0 --epoch 15 --learn-intrinsics --flow-ok --rep-cons  --loss laplacian_nll --loss-params-type var
@@ -60,14 +60,20 @@ CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename --lo
 # TO IMPLEMENT
 # debug only depth
 depth() {
-dev=2
+dev=0
 #ename=robustv2-depth-only-avg-rep-lr1e-5-resnet-ds5e-2-lossnoaug
 #CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --larger-pose --log ${DATADIR}/$ename --loss l1 --backbone resnet --weight-ds 5e-2 -b 12 --epoch 15 -l 1e-5 --rec-mode depth --rep-cons --softmin-beta 0 --norm bn --weight-ofs 0 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --debug-training
 #CUDA_VISIBLE_DEVICES=$dev python $(pwd)/eval_depth.py -c ${DATADIR}/$ename/best_model_val.tar -i $(pwd)/data/kitti/test_files_eigen.txt --single-scalor --predict --measure &>>$(pwd)/log/$ename.txt
 
 #ename=robustv2-depth-only-avg-rep-lr1e-5-resnet-ds5e-2-largerpose-dslev1-debug
-ename=debug-depth
-CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --ds-at-level 1 --larger-pose --log ${DATADIR}/$ename --loss l1 --backbone resnet --weight-ds 5e-2 -b 12 --epoch 15 -l 1e-5 --rec-mode depth --rep-cons --softmin-beta 0 --norm bn --weight-ofs 0 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --debug-training
+# depth min
+ename=debug-masked-min
+CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --ds-at-level 1 --larger-pose --log ${DATADIR}/$ename --loss l1 --config-file $(pwd)/misc/kitti.cfg --weight-ds 5e-2 -b 2 --epoch 3 -l 1e-5 --rec-mode depth --rep-cons --softmin-beta 'inf' --norm bn --weight-ofs 0 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --debug-training --workers 0
+
+# depth average
+ename=debug-masked-avg
+CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --ds-at-level 1 --larger-pose --log ${DATADIR}/$ename --loss l1 --config-file $(pwd)/misc/kitti.cfg --weight-ds 5e-2 -b 2 --epoch 3 -l 1e-5 --rec-mode depth --rep-cons --softmin-beta 0 --norm bn --weight-ofs 0 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --debug-training --workers 0
+
 #CUDA_VISIBLE_DEVICES=$dev python $(pwd)/eval_depth.py -c ${DATADIR}/$ename/best_model_val.tar -i $(pwd)/data/kitti/test_files_eigen.txt --single-scalor --predict --measure &>>$(pwd)/log/$ename.txt
 }
 
@@ -84,7 +90,7 @@ ename=debug-flow-uflow3
 # Kitti
 #CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename-kitti --loss l1 --flow-sm-alpha 150 --weight-ds 0 -b 4 --epoch 15 -l 5e-5 --rec-mode flow --rep-cons --softmin-beta 0 --norm bn --weight-ofs 1e-2 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --debug-training --verbose 0
 
-CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename-kitti --loss l1 --weight-ds 0 -b 4 --epoch 2 -l 5e-5 --rec-mode flow --rep-cons --softmin-beta 0 --norm bn --weight-ofs 1e-2 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --debug-training --verbose 0
+CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename-kitti --config-file $(pwd)/misc/kitti.cfg --loss l1 --weight-ds 0 -b 4 --epoch 2 -l 5e-5 --rec-mode flow --rep-cons --softmin-beta 0 --norm bn --weight-ofs 1e-2 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --debug-training --verbose 0
 CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename-sintel-clean --load-model ${DATADIR}/$ename-kitti/best_model_val.tar --config-file $(pwd)/misc/sintel_clean.cfg --loss l1 --weight-ds 0 -b 4 --epoch 10 -l 5e-5 --rec-mode flow --rep-cons --softmin-beta 0 --norm bn --weight-ofs 1e-2 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --debug-training
 CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename-sintel-final --load-model ${DATADIR}/$ename-kitti/best_model_val.tar --config-file $(pwd)/misc/sintel_final.cfg --loss l1 --weight-ds 0 -b 4 --epoch 10 -l 5e-5 --rec-mode flow --rep-cons --softmin-beta 0 --norm bn --weight-ofs 1e-2 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --debug-training
 

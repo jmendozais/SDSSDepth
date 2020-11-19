@@ -14,13 +14,17 @@ from lpips_pytorch import LPIPS
 lpips_criterion_ = LPIPS(net_type='squeeze', version='0.1')
 
 def l1(x, y, normalized=False):
+
     abs_diff = torch.abs(x - y)
     if normalized:
         abs_diff /= (torch.abs(x) + torch.abs(y) + 1e-6)
+
     return abs_diff.mean(1, keepdim = True)
     
 def normalized_l1(x, y):
+
     return l1(x, y, normalized=True)
+
 
 def unit_normalized_l1(x, y):
     '''
@@ -32,25 +36,53 @@ def unit_normalized_l1(x, y):
 
 
 def softmin(x, beta):
+
    values = F.softmin(beta * x, dim=1)
+
    return torch.sum(x * values.detach(), dim=1), values
 
 
-def min_and_selection_mask(x, dim=1):
-    ans, idx = torch.min(x, dim=dim)
-    idx = idx.unsqueeze(dim)
-    mask = torch.zeros(x.shape).to(x.device)
-    mask.scatter_(dim, idx, value=1)
-    return ans, mask
+def masked_mean(x, mask, dim=1):
+    '''
+    Args:
+        x: a tensor of shape [b, c, h, w]
+        mask: a visibility mask. 1 indicates that the value is vissible, otherwise is no vissible.
+    '''
+
+    assert x.shape == mask.shape
+
+    return torch.sum(x * mask, dim=1)/(torch.sum(mask, dim=1) + 1e-7), None
+
+
+def masked_min(x, mask, dim=1):
+    '''
+    Args:
+        x: a tensor of shape [b, c, h, w]
+        mask: a vissibility mask. 1 indicates that the value is vissible, otherwise is no vissible.
+    '''
+
+    assert x.shape == mask.shape 
+
+    almost_inf = (1e6 * (~mask)).detach()
+    nx = x + almost_inf # if mask is false in all views the gradient is the same, no values
+
+    _, idx = torch.min(nx, dim=dim, keepdim=True)
+    ans = torch.gather(x, dim, idx).squeeze(dim)
+
+    min_mask = torch.zeros(x.shape).to(x.device)
+    min_mask.scatter_(dim, idx, value=1)
+
+    return ans, min_mask
 
 
 def get_pooling_op(beta=1):
     if beta == float('inf'):
-        return min_and_selection_mask
+        return masked_min
     elif beta == 0:
-        return lambda x: (torch.mean(x, dim=1), None)
+        return masked_mean
     else:
-        return lambda x: softmin(x, beta)
+        #return lambda x: softmin(x, beta)
+        raise NotImplementedError("Masking not implemented for softmin")
 
 
 def create_norm_op(name, **kwargs):
@@ -143,6 +175,7 @@ def representation_consistency(results, weight_dc=1, weight_fc=1, weight_sc=1, s
     for i in range(num_scales):
         batch_size, num_recs, c, h, w = results.gt_imgs_pyr[i].size()
         res = l1(results.gt_imgs_pyr[i].view(-1, c, h, w), results.recs_pyr[i].view(-1, c, h, w))
+        mask = results.mask_pyr[i] # [b, 2*(seq_len - 1), h, w]
 
         # TODO: fix
         if weight_dc > 0:
@@ -177,8 +210,10 @@ def representation_consistency(results, weight_dc=1, weight_fc=1, weight_sc=1, s
 
         if rec_mode == 'depth': 
             res = res[:,:(num_recs//2),:,:]
+            mask = mask[:,:(num_recs//2),:,:]
         elif rec_mode == 'flow': 
             res = res[:,(num_recs//2):,:,:]
+            mask = mask[:,(num_recs//2):,:,:]
 
         if results.extra_out_pyr is not None:
             if rec_mode == 'depth': 
@@ -189,7 +224,12 @@ def representation_consistency(results, weight_dc=1, weight_fc=1, weight_sc=1, s
         else:
             err = norm(res, scale_idx=i)
 
-        min_err, weights = pooling(err)
+        '''
+        1. If min reprojection: min(err + MAX_INT*occ)
+        2. If average reprojection: sum(err*mask)/sum(mask)
+        3. Not defined for softmin  exp
+        '''
+        min_err, weights = pooling(err, mask)
  
         # coarser scales have lower weights (inspired by DispNet)
         total_loss += (1/(2**i)) * torch.mean(min_err)

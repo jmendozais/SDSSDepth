@@ -25,6 +25,7 @@ def log_results(writer, seq_len, results, res, err, min_err, loss_op, epoch, log
     _, _, h, w = imgs.size()
 
     rec_t = torch.transpose(results.recs_pyr[0].cpu(), 0, 1)
+    mask_t = torch.transpose(results.mask_pyr[0].cpu(), 0, 1)
     
     writer.add_image('tgt_imgs', imgs_grid, epoch)
 
@@ -35,8 +36,12 @@ def log_results(writer, seq_len, results, res, err, min_err, loss_op, epoch, log
         rigid_rec = util.denormalize(rec_t[:seq_len-1,:cols].reshape(-1, 3, h, w))
         rigid_rec_grid = make_grid(rigid_rec, nrow=cols)
 
+        rigid_mask = mask_t[:seq_len-1,:cols].reshape(-1, 1, h, w)
+        rigid_mask_grid = make_grid(rigid_mask, nrow=cols)
+
         writer.add_image('depths', depths_grid, epoch)
         writer.add_image('rigid_rec', rigid_rec_grid, epoch)
+        writer.add_image('rigid_mask', rigid_mask_grid, epoch)
 
     if log_flow:
         of_colors = util.optical_flow_to_rgb(results.ofs_pyr[0][:cols*2]) 
@@ -44,15 +49,18 @@ def log_results(writer, seq_len, results, res, err, min_err, loss_op, epoch, log
 
         flow_rec = util.denormalize(rec_t[seq_len-1:,:cols].reshape(-1, 3, h, w))
         flow_rec_grid = make_grid(flow_rec, nrow=cols) 
+
+        flow_mask = mask_t[seq_len-1:,:cols].reshape(-1, 1, h, w)
+        flow_mask_grid = make_grid(flow_mask, nrow=cols)
                  
         writer.add_image('flows', flows_grid, epoch)
         writer.add_image('flow_rec', flow_rec_grid, epoch)
+        writer.add_image('flow_mask', flow_sk_grid, epoch)
 
     if res != None:
-        res_t = torch.transpose(res[0].cpu(), 0, 1)
-        err_t = torch.transpose(err[0].cpu(), 0, 1)
+        res_t = torch.transpose(res[0], 0, 1)
+        err_t = torch.transpose(err[0], 0, 1)
         lb_err, ub_err = torch.min(err[0]), torch.max(err[0])
-        
         if log_depth:
             rigid_res = res_t[:seq_len-1,:cols].reshape(-1, 1, h, w)
             rigid_res = util.gray_to_rgb(rigid_res, 'coolwarm')

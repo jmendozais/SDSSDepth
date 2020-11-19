@@ -6,4 +6,4 @@ dill
 tensorboardX
 pyturbojpeg
 efficientnet-pytorch
-configargparser
+configargparse

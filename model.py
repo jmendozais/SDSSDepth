@@ -19,6 +19,7 @@ class Result:
     def __init__(self):
         self.tgt_imgs_pyr = []
         self.recs_pyr = []
+        self.mask_pyr = []
         self.gt_imgs_pyr = None
 
         self.depths_pyr = [] 
@@ -340,8 +341,9 @@ elf
             proj_tgt_cam_coords, src_pix_coords = self.transform_and_project(tgt_cam_coords, res.K_pyr[i], res.T)
             src_pix_coords = src_pix_coords.view(self.batch_size * (self.seq_len - 1), 2, h, w)
 
-            rigid_rec = self.grid_sample(src_imgs, src_pix_coords)
+            rigid_rec, rigid_mask = self.grid_sample(src_imgs, src_pix_coords, return_mask=True)
             rigid_rec = rigid_rec.view(self.batch_size, self.seq_len - 1, 3, h, w)
+            rigid_mask = rigid_mask.view(self.batch_size, self.seq_len - 1, 1, h, w)
 
             # depths, 3D coords and feats pair
             proj_depths = proj_tgt_cam_coords.view(-1, 4, h, w)[:,2:3] # shape??
@@ -349,6 +351,10 @@ elf
 
             sampled_depths = self.grid_sample(src_depths, src_pix_coords)
             res.sampled_depths_pyr.append(sampled_depths.view(self.batch_size, self.seq_len - 1, 1, h, w))
+
+            # visibility mask
+            rigid_mask = torch.logical_and(rigid_mask, res.proj_depths_pyr[-1] < res.sampled_depths_pyr[-1] + 1e-6)
+            rigid_mask = rigid_mask.view(self.batch_size, self.seq_len - 1, h, w)
 
             res.proj_coords_pyr.append(proj_tgt_cam_coords.view(self.batch_size, self.seq_len - 1, 4, h, w))
             src_cam_coords = self.ms_backproject[i](src_depths, res.inv_K_pyr[i])
@@ -360,14 +366,15 @@ elf
                 res.sampled_feats_pyr.append(sampled_feats.view(self.batch_size, self.seq_len - 1, num_maps, h, w))
 
             # reconstruct with the optical flow
-            src_pix_coords = self.ms_applyflow[i](res.ofs_pyr[i])
-            src_pix_coords = src_pix_coords.view(self.batch_size * (self.seq_len - 1), 2, h, w)
 
             flow_rec = self.grid_sample(src_imgs, src_pix_coords)
             flow_rec = flow_rec.view(self.batch_size, self.seq_len - 1, 3, h, w)
 
-            #flow_rec.append(self.grid_sample(src_imgs, src_pix_coords))
             res.recs_pyr.append(torch.cat([rigid_rec, flow_rec], axis=1))
+
+            res.mask_pyr.append(torch.cat([rigid_mask, rigid_mask], axis=1)) # TODO: change second 
+            # mask by an optical flow based occ mask
+
             # reconstruct with a large
             if self.loss_noaug:
                 tgt_imgs = F.interpolate(inputs_noaug[i][:,0], size=(h, w), mode='bilinear', align_corners=False)
@@ -413,7 +420,8 @@ elf
             mask = torch.logical_and(pix_coords[:,:,:,0] > -1, pix_coords[:,:,:,1] > -1)
             mask = torch.logical_and(mask, pix_coords[:,:,:,0] < 1)
             mask = torch.logical_and(mask, pix_coords[:,:,:,1] < 1)
-            return F.grid_sample(imgs, pix_coords, padding_mode='border', align_corners=False), mask # Mondepth2 used the default of old pytorch: align corners = true
+            # Monodepth2 used the default of old pytorch: align corners = true
+            return F.grid_sample(imgs, pix_coords, padding_mode='border', align_corners=False), mask 
         else:
             return F.grid_sample(imgs, pix_coords, padding_mode='border', align_corners=False)
 
