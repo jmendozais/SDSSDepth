@@ -41,6 +41,17 @@ class Result:
         self.inv_K_pyr = []
 
         self.extra_out_pyr = None
+        self.gt_imgs_pyr = []
+
+def gt_snippets_from_tgt_imgs(tgt_imgs, seq_len):
+    ''' Repeats each target imgs in a batch num_sources times'''
+    b, c, h, w = tgt_imgs.size()
+
+    imgs = torch.unsqueeze(tgt_imgs, 1)
+    imgs = imgs.expand(b, seq_len - 1, c, h, w)
+    imgs = torch.cat([imgs, imgs], axis=1) # duplicate for flow and rigid
+
+    return imgs
     
 class BackprojectDepth(nn.Module):
     '''
@@ -189,13 +200,14 @@ class Model(nn.Module):
         self.stack_flows = stack_flows
 
         self.num_motion_inputs = self.seq_len
+
         if self.stack_flows:
-            self.num_motion_inputs = 1
-        else:
             if self.multiframe_of:
                 self.num_motion_inputs = self.seq_len
             else:
                 self.num_motion_inputs = 2
+        else:
+            self.num_motion_inputs = 2 # for the decoders
 
         self.depth_net = DepthNet(norm=norm, width=self.width, height=self.height, num_ext_channels=num_extra_channels, backbone=depth_backbone, dropout=dropout, pred_disp=pred_disp)
         self.motion_net = MotionNet(self.seq_len, self.width, self.height, self.num_motion_inputs, self.stack_flows, learn_intrinsics=learn_intrinsics, norm=norm, num_ext_channels=num_extra_channels, backbone=flow_backbone, dropout=dropout, larger_pose=larger_pose)
@@ -219,6 +231,11 @@ class Model(nn.Module):
 
 
     def prepare_motion_input(self, inputs):
+        '''
+        Args:
+            A list of tensor containing the input at multiple scales. Each tensor has a shape [bs, nsrc, c, h, w]
+        
+        '''
 
         batch_size = len(inputs[0]) # train/test bs may differ
 
@@ -226,6 +243,7 @@ class Model(nn.Module):
 
             if self.multiframe_of:
                 motion_ins = inputs[0].view(batch_size, -1, self.height, self.width)
+                # [bs, (seq_len-1) * 3, h, w]
 
             else:
                 for i in range(batch_size):
@@ -238,7 +256,7 @@ class Model(nn.Module):
             # stack images in batch dimension for feature extraction
 
             # its independent of multiframe_of
-
+                
             motion_ins = inputs[0].view(-1, 3, self.height, self.width) # [bs*seq_len, 3, h, w]
 
         return motion_ins
@@ -276,7 +294,6 @@ elf
             res.ofs_pyr,  res.T, res.K_pyr = self.motion_net(motion_ins)
 
         # TODO check consistency with new flow modality
-        res.inv_K_pyr = []
         for i in range(self.num_scales):
             inv_K = torch.inverse(res.K_pyr[i]) 
             if  self.multiframe_of:
@@ -387,8 +404,10 @@ elf
             #tgt_imgs = torch.cat([tgt_imgs, tgt_imgs], axis=1) # duplicate for flow and rigid
 
             res.tgt_imgs_pyr.append(tgt_imgs)
-            
-        # reorganize batch
+            res.gt_imgs_pyr.append(gt_snippets_from_tgt_imgs(tgt_imgs, self.seq_len))
+
+        # create ground truth snippets repeating target images
+
         return res
 
 

@@ -25,20 +25,6 @@ import util
 
 from pytorch3d import transforms as transforms3D
 
-def gt_snippets_from_tgt_imgs(tgt_imgs, seq_len):
-    ''' Repeats each target imgs in a batch num_sources times'''
-    gt_pyr = []
-    num_scales = len(tgt_imgs)
-
-    for i in range(num_scales):
-        b, c, h, w = tgt_imgs[i].size()
-        imgs = torch.unsqueeze(tgt_imgs[i], 1)
-        imgs = imgs.expand(b, seq_len - 1, c, h, w)
-        imgs = torch.cat([imgs, imgs], axis=1) # duplicate for flow and rigid
-        gt_pyr.append(imgs)
-
-    return gt_pyr
-
 def print_epoch_stats(epoch, train_loss, val_loss, metric_groups):
     #out = "Ep {}, tr loss {:.4f}, val loss {:.4f}, ".format(epoch, train_loss, val_loss)
     out = ""
@@ -300,8 +286,6 @@ if __name__ == '__main__':
 
             results = model(data, data_noaug)
 
-            results.gt_imgs_pyr = gt_snippets_from_tgt_imgs(results.tgt_imgs_pyr, seq_len)
-
             batch_loss = compute_loss(model, data, results, args.rec_mode, args.rep_cons, num_scales,
                 args.weight_ds, args.ds_at_level, args.weight_ofs, args.flow_sm_alpha,
                 args.weight_dc, args.weight_fc, args.weight_sc, args.softmin_beta, norm_op, 
@@ -378,8 +362,6 @@ if __name__ == '__main__':
                     data_noaug[j] = data_noaug[j].to(args.device)
 
                 results = model(data, data_noaug)
-
-                results.gt_imgs_pyr = gt_snippets_from_tgt_imgs(results.tgt_imgs_pyr, seq_len)
 
                 results.tgt_depths_pyr = []
                 for j in range(num_scales):

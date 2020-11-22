@@ -147,7 +147,7 @@ class MotionNet(nn.Module):
             self.enc = MultiInputResNetEncoder(num_inputs=self.num_inputs, pretrained=pretrained)
         elif backbone == 'effnet':
             self.enc = MultiInputEfficientNetEncoder(num_inputs=self.num_inputs, pretrained=pretrained)
-        elif backbone == 'uflow':
+        elif backbone in ['uflow', 'uflow_lite']:
             if stack_flows is True:
                 raise ValueError("Uflow backbone does not support inputs stacked along the channels")
             self.enc = UFlowEncoder()
@@ -158,10 +158,20 @@ class MotionNet(nn.Module):
         self.in_dec = IntrinsicsDecoder(self.height, self.width, bottleneck_dim)
 
         pose_layers = 4 if self.larger_pose else 1
+
         self.pose_dec = PoseDecoder(self.num_inputs - 1, bottleneck_dim, num_layers=pose_layers)
 
         if backbone == 'uflow':
-            self.of_dec = UFlowDecoder(num_ch_out=(2 + self.num_ext_channels) * (self.num_inputs - 1))
+            self.of_dec = UFlowDecoder(num_ch_out=(2 + self.num_ext_channels) * (self.num_inputs - 1), 
+                height=self.height, 
+                width=self.width,
+                lite_mode=False)
+
+        elif backbone == 'uflow_lite':
+            self.of_dec = UFlowDecoder(num_ch_out=(2 + self.num_ext_channels) * (self.num_inputs - 1), 
+                height=self.height, 
+                width=self.width,
+                lite_mode=True)
         else:
             self.of_dec = CustomDecoder(self.enc.num_ch_skipt, num_ch_out=(2 + self.num_ext_channels) * (self.num_inputs - 1))
 

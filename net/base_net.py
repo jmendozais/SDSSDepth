@@ -369,15 +369,36 @@ class UFlowEncoder(nn.Module):
             feats.append(x)
 
         return feats
+    
+class Flow2Warp(nn.Module):
 
+    def __init__(self, height, width):
+        super(Flow2Warp, self).__init__()
+
+        self.height = height
+        self.width = width
+
+        hor = torch.linspace(0, width - 1, width).view(1, 1, 1, -1).expand(-1, -1, height, -1)
+        ver = torch.linspace(0, height - 1, height).view(1, 1, -1, 1).expand(-1, -1, -1, width)
+        self.grid = torch.cat([hor, ver], dim=1)
+        self.grid = nn.Parameter(self.grid, requires_grad=False)
+
+    def forward(self, flow):
+        '''
+        Args:
+            flow: A tensor of shape [b, 2, h, w]. the coordinates 
+
+        Returns:
+            A tensor containing the sum of grid + flow. 
+        '''
+
+        assert flow.device == self.grid.device
+
+        return self.grid + flow
+
+'''
+# Deprecated
 def flow_to_warp(flow):
-    '''
-    Args:
-        flow: A tensor of shape [b, 2, h, w]. the coordinates 
-
-    Returns:
-        A tensor containing the sum of grid + flow. []
-    '''
 
     b, _, h, w = flow.size()
 
@@ -389,6 +410,7 @@ def flow_to_warp(flow):
     grid = grid.to(flow.device)
 
     return grid + flow
+ '''
 
 def grid_sample(x, pix_coords):
     '''
@@ -421,11 +443,28 @@ def upsample(x, scale_factor=2, is_flow=False):
 
 class UFlowDecoder(nn.Module):
 
-    def __init__(self, same_resolution=True, num_ch_out=2):
+    def __init__(self, num_ch_out, height, width, same_resolution=True, lite_mode=True):
         super(UFlowDecoder, self).__init__()
 
         self.same_resolution = same_resolution
+        self.height = height
+        self.width = width
         self.levels = 5
+        self.lite_mode = lite_mode
+
+        if self.lite_mode:
+            self.start_cv_level = 4
+            self.flow_model_multiplier = 0.5
+            self.flow_model_layers = 3
+            self.refinement_model_multiplier = 0.5
+            self.refinement_model_layers = 4
+        else:
+            self.start_cv_level = 5
+            self.flow_model_multiplier = 1
+            self.flow_model_layers = 5
+            self.refinement_model_multiplier = 1
+            self.refinement_model_layers = 6
+
         self.max_displacement = 4
         self.num_ch_out = num_ch_out
         self.num_upsample_ctx_channels = 32
@@ -436,12 +475,16 @@ class UFlowDecoder(nn.Module):
         self.flow_blocks = self._build_flow_models()
         self.upsample_context_layers = self._build_upsample_context_layers()
         self.refinement_model = self._build_refinement_model()
+        self.flow_to_warp = self._build_flow_to_warp()
         
         # todo initializations
 
     def _build_refinement_model(self):
         layers = []
         conv_params = [(128, 1), (128, 2), (128, 4), (96, 8), (64, 16), (32, 1)]
+        assert self.refinement_model_layers > 0
+        conv_params = conv_params[:self.refinement_model_layers-1] + [conv_params[-1]]
+        conv_params = [(int(c * self.refinement_model_multiplier), d) for c, d in conv_params]
 
         in_channels = self.flow_model_channels[-1] + self.num_ch_out
         for c, d in conv_params:
@@ -457,6 +500,9 @@ class UFlowDecoder(nn.Module):
 
     def _build_flow_models(self):
         self.flow_model_channels = [128, 128, 96, 64, 32]
+        self.flow_model_channels = self.flow_model_channels[:self.flow_model_layers]
+        self.flow_model_channels = [int(self.flow_model_multiplier * c) for c in self.flow_model_channels]
+
         cost_volume_channels = (2 * self.max_displacement + 1) ** 2
 
         blocks = nn.ModuleList()
@@ -471,7 +517,8 @@ class UFlowDecoder(nn.Module):
 
             # no features neither cost volume at level 0
             if level > 0:
-                in_channels += cost_volume_channels
+                if level <= self.start_cv_level:
+                    in_channels += cost_volume_channels
                 in_channels += self.num_feats_channels[level] 
 
             if level < self.levels:
@@ -496,7 +543,6 @@ class UFlowDecoder(nn.Module):
             
     def _build_upsample_context_layers(self):
         in_context_channels = self.flow_model_channels[-1] # Consider accumulations TODO
-        assert in_context_channels == 32 # Remove
 
         out_context_channels = self.num_upsample_ctx_channels
 
@@ -507,6 +553,15 @@ class UFlowDecoder(nn.Module):
 
         return layers
 
+    def _build_flow_to_warp(self):
+        modules = nn.ModuleList()
+
+        for i in range(self.levels):
+            h = int(self.height/(2**i))
+            w = int(self.width/(2**i))
+            modules.append(Flow2Warp(h, w))
+
+        return modules
 
     def normalize_features(self, feats):
         means = []
@@ -572,6 +627,7 @@ class UFlowDecoder(nn.Module):
 
         # paper [5, 4, 3, 2]
         # same resolution [5, 4, 3, 2, 1, 0]
+        # flow_to_warp [4,3,2,1,[0]]
 
         for level, (feats1, feats2) in reversed(
             list(enumerate(zip(feat_pyr1, feat_pyr2)))[last_level:]):
@@ -591,15 +647,15 @@ class UFlowDecoder(nn.Module):
                     warped2 = feats2
                 else:
                     flow_up = flow_extra_up[:,:2]
-                    warp_up = flow_to_warp(flow_up)
+                    warp_up = self.flow_to_warp[level](flow_up)
                     warped2 = grid_sample(feats2, warp_up)
         
-                feats1_normalized, warped2_normalized = self.normalize_features([feats1, warped2])
+                if level <= self.start_cv_level:
+                    feats1_normalized, warped2_normalized = self.normalize_features([feats1, warped2])
+                    cost_volume = self.compute_cost_volume(feats1_normalized, warped2_normalized)
+                    cost_volume = self.lrelu(cost_volume)
+                    ins.append(cost_volume)
 
-                cost_volume = self.compute_cost_volume(feats1_normalized, warped2_normalized)
-                cost_volume = self.lrelu(cost_volume)
-
-                ins.append(cost_volume)
                 ins.append(feats1) 
 
             ins = torch.cat(ins, dim=1) 
