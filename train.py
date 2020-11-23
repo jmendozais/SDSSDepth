@@ -65,7 +65,7 @@ def compute_loss(model, data, results, rec_mode, rep_cons, num_scales,
     if rep_cons:
         rec_loss, res, err, pooled_err = loss.representation_consistency(results, weight_dc, weight_fc, weight_sc, softmin_beta, norm_op, rec_mode=rec_mode, return_residuals=True)
         if log_depth or log_flow:
-            log_results(writer, seq_len, results, res, err, _err, norm_op, epoch=epoch, log_depth=log_depth, log_flow=log_flow)
+            log_results(writer, seq_len, results, res, err, pooled_err, norm_op, epoch=epoch, log_depth=log_depth, log_flow=log_flow)
     else:
         rec_loss, rec_terms = loss.baseline_consistency(results, weight_dc, weight_fc, weight_sc, color_nonsmoothness=softmin_beta, rec_mode=rec_mode)
         if log_depth or log_flow:
