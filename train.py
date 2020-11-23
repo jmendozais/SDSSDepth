@@ -63,9 +63,9 @@ def compute_loss(model, data, results, rec_mode, rep_cons, num_scales,
     it, epoch, writer):
 
     if rep_cons:
-        rec_loss, res, err, min_err = loss.representation_consistency(results, weight_dc, weight_fc, weight_sc, softmin_beta, norm_op, rec_mode=rec_mode, return_residuals=True)
+        rec_loss, res, err, pooled_err = loss.representation_consistency(results, weight_dc, weight_fc, weight_sc, softmin_beta, norm_op, rec_mode=rec_mode, return_residuals=True)
         if log_depth or log_flow:
-            log_results(writer, seq_len, results, res, err, min_err, norm_op, epoch=epoch, log_depth=log_depth, log_flow=log_flow)
+            log_results(writer, seq_len, results, res, err, _err, norm_op, epoch=epoch, log_depth=log_depth, log_flow=log_flow)
     else:
         rec_loss, rec_terms = loss.baseline_consistency(results, weight_dc, weight_fc, weight_sc, color_nonsmoothness=softmin_beta, rec_mode=rec_mode)
         if log_depth or log_flow:
@@ -154,14 +154,14 @@ if __name__ == '__main__':
     parser.add_argument('--dropout', type=float, default=1e-2)
 
     parser.add_argument('--depth-backbone', type=str, default='resnet')
-    parser.add_argument('--flow-backbone', type=str, default='uflow')
+    parser.add_argument('--flow-backbone', type=str, default='resnet')
 
     parser.add_argument('--pred-disp', action='store_true')
     parser.add_argument('--weight-ds', type=float, default=1e-2)
     parser.add_argument('--ds-at-level', type=int, default=-1) # -1 = all levels
 
-    parser.add_argument('--multi-flow', action='store_true')
-    parser.add_argument('--stack-flows', action='store_true')
+    parser.add_argument('--multi-flow', action='store_true') #multi-frame
+    parser.add_argument('--stack-flows', action='store_true') #stack motion ins
     parser.add_argument('--flow-sm-alpha', type=int, default=1)
     parser.add_argument('--weight-ofs', type=float, default=1e-3)
 

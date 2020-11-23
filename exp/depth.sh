@@ -1,6 +1,6 @@
 #!/bin/bash -i
 BASH_ENV="~/.bashrc"
-
+ 
 # 1. Experiment Design
 # Finding parameter for depth:
 # 1. finding the best learning rate with low smoothnes constraint for each backbone
@@ -11,11 +11,11 @@ BASH_ENV="~/.bashrc"
 # Depth constrained to a range [0.1 - 100]
 # Data augmentation only to fed the networks, not for the loss
 
-#DATADIR='/data/ra153646/robustness' # dlm
-DATADIR=$(pwd)/out # liv
+DATADIR='/data/ra153646/robustness' # dlm
+#DATADIR=$(pwd)/out # liv
 
-#CONTAINER='41e541473596' # dlm
-CONTAINER='11ff68d7e45f' # bezier
+CONTAINER='41e541473596' # dlm
+#CONTAINER='11ff68d7e45f' # bezier
 
 avgrep_depth_regnet() {
 dev=2
@@ -48,13 +48,13 @@ dev=2
 ename=robustv2-depth-only-avg-rep-ds1e-3-lr5e-6-resnet
 d="CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename --loss l1 --backbone resnet --weight-ds 1e-3 -b 12 --epoch 15 -l 5e-6 --rec-mode depth --rep-cons --softmin-beta 0 --norm bn --weight-ofs 0 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 &>$(pwd)/log/$ename.txt; CUDA_VISIBLE_DEVICES=$dev python $(pwd)/eval_depth.py -c ${DATADIR}/$ename/best_model_val.tar -i $(pwd)/data/kitti/test_files_eigen.txt --single-scalor --predict --measure &>>$(pwd)/log/$ename.txt"
 
-echo "$d"s 
+echo "$d"
 ded $CONTAINER "$d"
-}
+
 
 avgrep_depth_imp() {
 # Run again with more stable config 
-dev=0
+dev=2
 
 #ename=robustv2-it2-depth-only-avg-rep-lr1e-5-resnet-ds5e-2-lpose-try2
 #a="CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --larger-pose --log ${DATADIR}/$ename --loss l1 --backbone resnet --weight-ds 5e-2 -b 12 --epoch 20 -l 1e-5 --rec-mode depth --rep-cons --softmin-beta 0 --norm bn --weight-ofs 0 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 &>$(pwd)/log/$ename.txt; CUDA_VISIBLE_DEVICES=$dev python $(pwd)/eval_depth.py -c ${DATADIR}/$ename/best_model_val.tar -i $(pwd)/data/kitti/test_files_eigen.txt --single-scalor --predict --measure &>>$(pwd)/log/$ename.txt"
@@ -67,7 +67,9 @@ dev=0
 #d="CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --larger-pose --pred-disp --loss-noaug --log ${DATADIR}/$ename --loss l1 --backbone resnet --weight-ds 5e-2 -b 12 --epoch 20 -l 1e-5 --rec-mode depth --rep-cons --softmin-beta 0 --norm bn --weight-ofs 0 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 &>$(pwd)/log/$ename.txt; CUDA_VISIBLE_DEVICES=$dev python $(pwd)/eval_depth.py -c ${DATADIR}/$ename/best_model_val.tar -i $(pwd)/data/kitti/test_files_eigen.txt --single-scalor --predict --measure &>>$(pwd)/log/$ename.txt"
 
 ename=robustv2-it2-depth-only-avg-rep-lr1e-5-resnet-ds5e-2-lpose-pdisp-vismask
-d="CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --pred-disp --larger-pose --log ${DATADIR}/$ename --loss l1 --weight-ds 5e-2 -b 12 --epoch 20 -l 1e-5 --rec-mode depth --rep-cons --softmin-beta 0 --norm bn --weight-ofs 0 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 &>$(pwd)/log/$ename.txt; CUDA_VISIBLE_DEVICES=$dev python $(pwd)/eval_depth.py -c ${DATADIR}/$ename/best_model_val.tar -i $(pwd)/data/kitti/test_files_eigen.txt --single-scalor --predict --measure &>>$(pwd)/log/$ename.txt"
+d="CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --pred-disp --larger-pose --log ${DATADIR}/$ename --loss l1 --flow-backbone resnet --multi-flow --stack-flows --weight-ds 5e-2 -b 12 --epoch 20 -l 1e-5 --rec-mode depth --rep-cons --softmin-beta 0 --norm bn --weight-ofs 0 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 &>$(pwd)/log/$ename.txt; CUDA_VISIBLE_DEVICES=$dev python $(pwd)/eval_depth.py -c ${DATADIR}/$ename/best_model_val.tar -i $(pwd)/data/kitti/test_files_eigen.txt --single-scalor --predict --measure &>>$(pwd)/log/$ename.txt"
+
+#CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --pred-disp --larger-pose --log ${DATADIR}/$ename --loss l1 --flow-backbone resnet --multi-flow --stack-flows --weight-ds 5e-2 -b 12 --epoch 20 -l 1e-5 --rec-mode depth --rep-cons --softmin-beta 0 --norm bn --weight-ofs 0 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0
 
 echo "$d"
 ded $CONTAINER "$d"

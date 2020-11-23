@@ -171,7 +171,7 @@ def representation_consistency(results, weight_dc=1, weight_fc=1, weight_sc=1, s
     total_loss = 0
     res_pyr = []
     err_pyr = []
-    min_err_pyr = []
+    pooled_err_pyr = []
     for i in range(num_scales):
         batch_size, num_recs, c, h, w = results.gt_imgs_pyr[i].size()
         res = l1(results.gt_imgs_pyr[i].view(-1, c, h, w), results.recs_pyr[i].view(-1, c, h, w))
@@ -229,18 +229,18 @@ def representation_consistency(results, weight_dc=1, weight_fc=1, weight_sc=1, s
         2. If average reprojection: sum(err*mask)/sum(mask)
         3. Not defined for softmin  exp
         '''
-        min_err, weights = pooling(err, mask)
+        pooled_err, weights = pooling(err, mask)
  
         # coarser scales have lower weights (inspired by DispNet)
-        total_loss += (1/(2**i)) * torch.mean(min_err)
+        total_loss += (1/(2**i)) * torch.mean(pooled_err)
 
         if return_residuals:
             res_pyr.append(res)
             err_pyr.append(err)
-            min_err_pyr.append((min_err, weights))
+            pooled_err_pyr.append((pooled_err, weights))
 
     if return_residuals:
-        return total_loss, res_pyr, err_pyr, min_err_pyr
+        return total_loss, res_pyr, err_pyr, pooled_err_pyr
     else:
         return total_loss
 

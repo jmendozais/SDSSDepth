@@ -243,6 +243,9 @@ class MotionNet(nn.Module):
             # TODO: Does it hurt the performance of pose and intrinsics estimation? Do we require a pose model?
             feats_sum = feats_pyr1[-1] + feats_pyr2[-1] # it should have 32 channels
 
+            # This encoder join the feature maps from the level 1 or 2 to a higher level embedding.
+            # self.bottleneck = FPEncoder(feats_pyr1, feats_pyr2) 
+
             self.bottleneck = F.adaptive_avg_pool2d(feats_sum.detach(), (1, 1)) 
 
             outs = self.of_dec(feats_pyr1, feats_pyr2) # [bs * (seq_len - 1), 2, h, w]
