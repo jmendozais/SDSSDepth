@@ -9,9 +9,9 @@ from .consistency_loss import *
 
 # losses at image level
 
-from lpips_pytorch import LPIPS
+from lpips import LPIPS
 
-lpips_criterion_ = LPIPS(net_type='squeeze', version='0.1')
+lpips_criterion_ = LPIPS(net='squeeze')
 
 def l1(x, y, normalized=False):
 
@@ -163,7 +163,16 @@ def color_consistency(imgs, recs, nonsmoothness='inf', rec_mode='joint', return_
     return _temporal_consistency(imgs, recs, residual_op=l1, nonsmoothness=nonsmoothness, rec_mode=rec_mode, return_residuals=False)
 
 
-def representation_consistency(results, weight_dc=1, weight_fc=1, weight_sc=1, softmin_beta=0, norm=L1(), rec_mode='joint', return_residuals=False):
+def representation_consistency(
+    results, 
+    weight_dc=1, 
+    weight_fc=1, 
+    weight_sc=1, 
+    softmin_beta=0, 
+    norm=L1(), 
+    params_qt=0.0,
+    rec_mode='joint', 
+    return_residuals=False):
 
     pooling = get_pooling_op(softmin_beta)
     num_scales = len(results.gt_imgs_pyr)
@@ -220,6 +229,17 @@ def representation_consistency(results, weight_dc=1, weight_fc=1, weight_sc=1, s
                 extra = results.extra_out_pyr[i][:,:(num_recs//2),:,:,:]
             elif rec_mode == 'flow': 
                 extra = results.extra_out_pyr[i][:,(num_recs//2):,:,:,:]
+
+            if params_qt > 0.0:
+                bs, nr, _, _, _ = extra.shape
+                extra = 
+                extra_qt = torch.quantile(extra.view(bs, nr, -1, 1, 1), params_qt, dim=2, keepdim=True)
+                extra = torch.where(extra < extra_qt, extra_qt, extra)
+                if rec_mode == 'depth': 
+                    results.extra_out_pyr[i][:,:(num_recs//2),:,:,:] = extra
+                elif rec_mode == 'flow': 
+                    results.extra_out_pyr[i][:,(num_recs//2):,:,:,:] = extra
+            
             err = norm(res, extra)
         else:
             err = norm(res, scale_idx=i)
@@ -332,32 +352,32 @@ def smoothness(data, weights, num_scales, order=2):
     return loss
 
 
-def disp_smoothness(disps, data, ds_at_level, num_scales, order=2):
+def normalized_smoothness(target, data, sm_at_level, num_scales, order=2):
     '''
     Args:
         disps: a list of tensors containing the predicted disparity maps at multiple 
         scales. Each tensor has a shape [batch_size * seq_len, 1, h, w].
     '''
     weights = None
-    norm_disps = []
+    norm_target = []
 
-    if ds_at_level == -1:
+    if sm_at_level == -1:
         weights = exp_gradient(data, num_scales)
 
         for i in range(num_scales):
-            disp_mean = torch.mean(disps[i], dim=[2, 3], keepdim=True)
-            norm_disps.append(disps[i] / (disp_mean + 1e-7))
+            target_mean = torch.mean(target[i], dim=[2, 3], keepdim=True)
+            norm_target.append(target[i] / (target_mean + 1e-7))
 
     else:
-        assert ds_at_level >= 0 and ds_at_level < len(disps)
+        assert sm_at_level >= 0 and sm_at_level < len(target)
 
         num_scales = 1
-        weights = exp_gradient([data[ds_at_level]], num_scales)
+        weights = exp_gradient([data[sm_at_level]], num_scales)
 
-        disp_mean = torch.mean(disps[ds_at_level], dim=[2, 3], keepdim=True)
-        norm_disps.append(disps[ds_at_level] / (disp_mean + 1e-7))
+        target_mean = torch.mean(target[sm_at_level], dim=[2, 3], keepdim=True)
+        norm_target.append(target[sm_at_level] / (target_mean + 1e-7))
 
-    return smoothness(norm_disps, weights, num_scales, order)
+    return smoothness(norm_target, weights, num_scales, order)
 
 
 def flow_smoothness(flows, data, num_scales, order=1, alpha=1):

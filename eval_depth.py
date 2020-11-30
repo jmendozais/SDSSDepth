@@ -86,14 +86,23 @@ if __name__ == '__main__':
         assert len(pred_depths) == num_test
 
         pred_depths = resize_like(pred_depths, gt_depths)
+
         if args.single_scalor:
             scale_factor = compute_scale_factor(pred_depths, gt_depths, args.min_depth, args.max_depth)
             metrics = compute_metrics(pred_depths, gt_depths, args.min_depth, args.max_depth, scale_factor)
-        else:
-            metrics = compute_metrics(pred_depths, gt_depths, args.min_depth, args.max_depth)
 
-        for metric, value in metrics.items():
-            print('{} : {:.4f}'.format(metric, value))
+            print("Consistent scale factor")
+            print(' '.join([k for k in metrics.keys()]))
+            print(' '.join(['{:.4f}'.format(metrics[k]) for k in metrics.keys()]))
+
+        metrics = compute_metrics(pred_depths, gt_depths, args.min_depth, args.max_depth)
+
+        print("Ambiguous scale factor")
+        print(' '.join([k for k in metrics.keys()]))
+        print(' '.join(['{:.4f}'.format(metrics[k]) for k in metrics.keys()]))
+
+        #for metric, value in metrics.items():
+        #    print('{} : {:.4f}'.format(metric, value))
 
     print('time: ', time.perf_counter() - start)
 

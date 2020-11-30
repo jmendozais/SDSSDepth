@@ -43,10 +43,11 @@ class ParameterizedLoss(nn.Module):
 
 class LaplacianNLL(ParameterizedLoss):
 
-    def __init__(self, params_type=PARAMS_VARIABLE, params_lb=1e-5, num_recs=None, height=None, width=None, scale_init=0.5413):
+    def __init__(self, params_type=PARAMS_VARIABLE, params_lb=1e-5, aux_weight=1.0, num_recs=None, height=None, width=None, scale_init=0.5413):
         super(LaplacianNLL, self).__init__(params_type, 1, num_recs, height, width, 4)
         self.scale_lb = params_lb
         self.scale_init = scale_init # ~ inv_softplus(1)
+        self.aux_weight = aux_weight
         #self.scale_init = 1.0 # if we desire to set an initial value for the scale params, we can use inv_softmax + zero init, or initilizing the value directly on the params initialization
 
     def forward(self, x, scale=None, scale_idx=0):
@@ -68,15 +69,16 @@ class LaplacianNLL(ParameterizedLoss):
 
         scale = F.softplus(scale + self.scale_init) + self.scale_lb
 
-        return torch.abs(x)/scale + torch.log(2*scale)
+        return torch.abs(x)/scale + self.aux_weight * torch.log(2*scale)
 
 
 class LaplacianNLL2(ParameterizedLoss):
 
-    def __init__(self, params_type=PARAMS_VARIABLE, params_lb=1e-5, num_recs=None, height=None, width=None, scale_init=0.5413):
+    def __init__(self, params_type=PARAMS_VARIABLE, params_lb=1e-5, aux_weight=1.0, num_recs=None, height=None, width=None, scale_init=0.5413):
         super(LaplacianNLL2, self).__init__(params_type, 1, num_recs, height, width, 4)
         self.scale_lb = params_lb
         self.scale_init = scale_init # ~ inv_softplus(1)
+        self.aux_weight = aux_weight
         #self.scale_init = 1.0 # if we desire to set an initial value for the scale params, we can use inv_softmax + zero init, or initilizing the value directly on the params initialization
 
     def forward(self, x, scale=None, scale_idx=0):
@@ -103,9 +105,10 @@ class LaplacianNLL2(ParameterizedLoss):
 
 class LaplacianNLL3(ParameterizedLoss):
 
-    def __init__(self, params_type=PARAMS_VARIABLE, num_recs=None, height=None, width=None, params_init=0.0):
+    def __init__(self, params_type=PARAMS_VARIABLE, params_lb=None, aux_weight=1.0, num_recs=None, height=None, width=None, params_init=0.0):
         super(LaplacianNLL3, self).__init__(params_type, 1, num_recs, height, width, 4)
         self.params_init = params_init 
+        self.aux_weight = aux_weight
 
     def forward(self, x, params=None, params_idx=0):
         '''
@@ -126,13 +129,14 @@ class LaplacianNLL3(ParameterizedLoss):
 
         params = params + self.params_init 
 
-        return torch.abs(x)*torch.exp(-params) + params + math.log(2)
+        return torch.abs(x)*torch.exp(-params) + self.aux_weight * params + math.log(2)
 
 class LaplacianNLL4(ParameterizedLoss):
 
-    def __init__(self, params_type=PARAMS_VARIABLE, num_recs=None, height=None, width=None, params_init=0.0):
+    def __init__(self, params_type=PARAMS_VARIABLE, params_lb=None, aux_weight=1.0, num_recs=None, height=None, width=None, params_init=0.0):
         super(LaplacianNLL4, self).__init__(params_type, 1, num_recs, height, width, 4)
         self.params_init = params_init 
+        self.aux_weight = aux_weight
 
     def forward(self, x, params=None, params_idx=0):
         '''
@@ -153,7 +157,7 @@ class LaplacianNLL4(ParameterizedLoss):
 
         params = params + self.params_init 
 
-        return torch.abs(x)*torch.exp(params) - params + math.log(1/2)
+        return torch.abs(x)*torch.exp(params) - self.aux_weight * params + math.log(0.5)
 
 # Fix like LaplacianNLL
 class CharbonnierNLL(nn.Module):

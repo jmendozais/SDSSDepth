@@ -1,6 +1,7 @@
 #!/bin/bash  -i
 BASH_ENV="~/.bashrc"
-DATADIR=$(pwd)/out #'/data/ra153646/robustness'
+#DATADIR=$(pwd)/out 
+DATADIR='/data/ra153646/robustness'
 
 #ename=debug-epipolar-detach
 #CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename -b 2 --weight-ds 1e-1 --weight-ofs 1e-2 --weight-ec 1 --ec-mode 'samp' --weight-dc 0 --weight-fc 0 --weight-sc 1 --weight-pl 0 --epoch 15 --learn-intrinsics --flow-ok --rep-cons  --loss laplacian_nll --loss-params-type var
@@ -22,8 +23,8 @@ CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename -b 1
 
 lap() {
 dev=2
-ename=debug-model-lapfun-ds1e-1-fs1e-2-lr1e-5
-CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename -b 12 --loss laplacian_nll --loss-params-type fun -l 1e-5 --weight-ds 1e-1 --weight-ofs 1e-2 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --epoch 15 --learn-intrinsics --rep-cons --debug-training
+ename=debug-model-lapfun-ds1e-1-fs1e-2-lr1e-5-pmask
+CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename -b 12 --multi-flow --stack-flows --loss laplacian_nll --loss-params-type fun -l 1e-5 --weight-ds 1e-1 --weight-ofs 1e-2 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --epoch 15 --learn-intrinsics --rep-cons --pred-disp --larger-pose --debug-training
 }
 
 lap_debug() {
@@ -61,15 +62,6 @@ CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename --lo
 # debug only depth
 depth() {
 dev=0
-#ename=robustv2-depth-only-avg-rep-lr1e-5-resnet-ds5e-2-lossnoaug
-#CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --larger-pose --log ${DATADIR}/$ename --loss l1 --backbone resnet --weight-ds 5e-2 -b 12 --epoch 15 -l 1e-5 --rec-mode depth --rep-cons --softmin-beta 0 --norm bn --weight-ofs 0 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --debug-training
-#CUDA_VISIBLE_DEVICES=$dev python $(pwd)/eval_depth.py -c ${DATADIR}/$ename/best_model_val.tar -i $(pwd)/data/kitti/test_files_eigen.txt --single-scalor --predict --measure &>>$(pwd)/log/$ename.txt
-
-#ename=robustv2-depth-only-avg-rep-lr1e-5-resnet-ds5e-2-largerpose-dslev1-debug
-# depth min
-#ename=debug-masked-min
-#CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --ds-at-level 1 --larger-pose --log ${DATADIR}/$ename --loss l1 --config-file $(pwd)/misc/kitti.cfg --weight-ds 5e-2 -b 2 --epoch 3 -l 1e-5 --rec-mode depth --rep-cons --softmin-beta 'inf' --norm bn --weight-ofs 0 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --debug-training --workers 0
-
 CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --pred-disp --larger-pose --log ${DATADIR}/$ename --loss l1 --flow-backbone resnet --multi-flow --stack-flows --weight-ds 5e-2 -b 12 --epoch 20 -l 1e-5 --rec-mode depth --rep-cons --softmin-beta 0 --norm bn --weight-ofs 0 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 
 
 # depth average
@@ -78,11 +70,19 @@ CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --pred-disp --larger-pose --
 #CUDA_VISIBLE_DEVICES=$dev python $(pwd)/eval_depth.py -c ${DATADIR}/$ename/best_model_val.tar -i $(pwd)/data/kitti/test_files_eigen.txt --single-scalor --predict --measure &>>$(pwd)/log/$ename.txt
 }
 
+
+depth_uflow() {
+ename=depth_uflow
+dev=1
+
+CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --pred-disp --larger-pose --log ${DATADIR}/$ename --loss l1 --flow-backbone uflow_lite --weight-ds 5e-2 -b 12 --epoch 3 -l 1e-5 --rec-mode depth --rep-cons --softmin-beta 0 --norm bn --weight-ofs 0 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --debug-training
+}
+
 config_file() {
 dev=0
 ename=config
-CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename --loss l1 --backbone resnet --dropout 0.5 --weight-ds 1e-3 -b 12 --epoch 15 -l 5e-5 --rep-cons --softmin-beta 0 --norm bn --weight-ofs 0 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --debug-training 
-#CUDA_VISIBLE_DEVICES=$dev python $(pwd)/eval_depth.py -c ${DATADIR}/$ename/best_model_val.tar -i $(pwd)/data/kitti/test_files_eigen.txt --single-scalor --predict --measure 
+#CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename --loss l1 --backbone resnet --dropout 0.5 --weight-ds 1e-3 -b 12 --epoch 15 -l 5e-5 --rep-cons --softmin-beta 0 --norm bn --weight-ofs 0 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --debug-training 
+CUDA_VISIBLE_DEVICES=$dev python $(pwd)/eval_depth.py -c ${DATADIR}/$ename/best_model_val.tar -i $(pwd)/data/kitti/test_files_eigen.txt --single-scalor --predict --measure 
 }
 
 flow() {
@@ -127,14 +127,27 @@ CUDA_VISIBLE_DEVICES=$dev python $(pwd)/eval_depth.py -c ${DATADIR}/$ename/check
 
 #ename=debug-rep-ds1e-1-fs1e-2
 #CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename --weight-ds 1e-1 --weight-ofs 1e-2 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 -b 12 --epoch 15 -l 5e-5 --learn-intrinsics --flow-ok --rep-cons --norm bn
-
 # &>$(pwd)/log/$ename.txt; CUDA_VISIBLE_DEVICES=$dev python $(pwd)/eval_depth.py -c ${DATADIR}/$ename/best_model_val.tar -i $(pwd)/data/kitti/test_files_eigen.txt --single-scalor --predict --measure &>>$(pwd)/log/$ename.txt" 
 
 depth_lap() {
 dev=1
+ename='debug_depth_lap_aux_quantile-try3'
 
-CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename --flow-backbone resnet --stack-flows --multi-flow --debug-training --loss laplacian_nll --loss-params-type fun --loss-params-lb 1e-4 --weight-ds 5e-2 -b 12 --epoch 3 -l 1e-5 --rec-mode depth --rep-cons --softmin-beta 0 --norm bn --weight-ofs 0 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --pred-disp --larger-pose 
+#CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename --flow-backbone resnet --stack-flows --multi-flow --debug-training --loss laplacian_nll --loss-params-type fun --loss-params-lb 1e-4 --weight-ds 5e-2 -b 12 --epoch 3 -l 1e-5 --rec-mode depth --rep-cons --softmin-beta 0 --norm bn --weight-ofs 0 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --pred-disp --larger-pose 
+#CUDA_VISIBLE_DEVICES=$dev python $(pwd)/eval_depth.py -c ${DATADIR}/$ename/best_model_val.tar -i $(pwd)/data/kitti/test_files_eigen.txt --single-scalor --predict --measure
 
+# debug lap aux
+#CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename --loss-aux-weight 1e-2 --loss laplacian_nll --flow-backbone resnet --stack-flows --multi-flow --loss-params-type fun --loss-params-lb 1e-4 --weight-ds 5e-2 -b 12 --epoch 20 -l 1e-5 --rec-mode depth --rep-cons --softmin-beta 0 --norm bn --weight-ofs 0 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --pred-disp --larger-pose --debug-training
+#CUDA_VISIBLE_DEVICES=$dev python $(pwd)/eval_depth.py -c ${DATADIR}/$ename/best_model_val.tar -i $(pwd)/data/kitti/test_files_eigen.txt --single-scalor --predict --measure 
+
+# debug lap param continuity 
+#ename=robustv2-it5-parsm1e-1-pmask-depth-avg-rep-lr1e-5-ds5e-2-lpose-pdisp-lapnll-fun-lb1e-4
+#CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename --loss-params-sm 1e-1 --loss laplacian_nll --flow-backbone resnet --stack-flows --multi-flow --loss-params-type fun --loss-params-lb 1e-4 --weight-ds 5e-2 -b 12 --epoch 20 -l 1e-5 --rec-mode depth --rep-cons --softmin-beta 0 --norm bn --weight-ofs 0 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --pred-disp --larger-pose --debug-training
+#CUDA_VISIBLE_DEVICES=$dev python $(pwd)/eval_depth.py -c ${DATADIR}/$ename/best_model_val.tar -i $(pwd)/data/kitti/test_files_eigen.txt --single-scalor --predict --measure &>>$(pwd)/log/$ename.txt"
+
+# debug quantile idea
+
+CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename --loss-params-qt 0.75 --loss laplacian_nll --flow-backbone resnet --stack-flows --multi-flow --loss-params-type fun --loss-params-lb 1e-4 --weight-ds 5e-2 -b 12 --epoch 20 -l 1e-5 --rec-mode depth --rep-cons --softmin-beta 0 --norm bn --weight-ofs 0 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --pred-disp --larger-pose --debug-training
 #CUDA_VISIBLE_DEVICES=$dev python $(pwd)/eval_depth.py -c ${DATADIR}/$ename/best_model_val.tar -i $(pwd)/data/kitti/test_files_eigen.txt --single-scalor --predict --measure &>>$(pwd)/log/$ename.txt
 
 }

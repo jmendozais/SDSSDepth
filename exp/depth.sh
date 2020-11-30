@@ -50,7 +50,23 @@ d="CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename -
 
 echo "$d"
 ded $CONTAINER "$d"
+}
 
+avgrep_depth_uflow() {
+dev=2
+
+ename=robustv3-it1-depth-only-avg-rep-lr5e-5-uflow-ds5e-2-lpose-pdisp-vismask
+a="CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --pred-disp --larger-pose --log ${DATADIR}/$ename --loss l1 --flow-backbone uflow_lite --weight-ds 5e-2 -b 12 --epoch 20 -l 5e-5 --rec-mode depth --rep-cons --softmin-beta 0 --norm bn --weight-ofs 0 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 &>$(pwd)/log/$ename.txt; CUDA_VISIBLE_DEVICES=$dev python $(pwd)/eval_depth.py -c ${DATADIR}/$ename/best_model_val.tar -i $(pwd)/data/kitti/test_files_eigen.txt --single-scalor --predict --measure &>>$(pwd)/log/$ename.txt"
+
+ename=robustv3-it1-depth-only-avg-rep-lr1e-5-uflow-ds5e-2-lpose-pdisp-vismask
+b="CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --pred-disp --larger-pose --log ${DATADIR}/$ename --loss l1 --flow-backbone uflow_lite --weight-ds 5e-2 -b 12 --epoch 20 -l 1e-5 --rec-mode depth --rep-cons --softmin-beta 0 --norm bn --weight-ofs 0 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 &>$(pwd)/log/$ename.txt; CUDA_VISIBLE_DEVICES=$dev python $(pwd)/eval_depth.py -c ${DATADIR}/$ename/best_model_val.tar -i $(pwd)/data/kitti/test_files_eigen.txt --single-scalor --predict --measure &>>$(pwd)/log/$ename.txt"
+
+ename=robustv3-it1-depth-only-avg-rep-lr5e-6-uflow-ds5e-2-lpose-pdisp-vismask
+c="CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --pred-disp --larger-pose --log ${DATADIR}/$ename --loss l1 --flow-backbone uflow_lite --weight-ds 5e-2 -b 12 --epoch 20 -l 5e-6 --rec-mode depth --rep-cons --softmin-beta 0 --norm bn --weight-ofs 0 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 &>$(pwd)/log/$ename.txt; CUDA_VISIBLE_DEVICES=$dev python $(pwd)/eval_depth.py -c ${DATADIR}/$ename/best_model_val.tar -i $(pwd)/data/kitti/test_files_eigen.txt --single-scalor --predict --measure &>>$(pwd)/log/$ename.txt"
+
+echo "$a;$b;$c"
+ded $CONTAINER "$a;$b;$c"
+}
 
 avgrep_depth_imp() {
 # Run again with more stable config 
@@ -125,8 +141,6 @@ c="CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename -
 echo "$a;$b;$c"
 ded $CONTAINER "$a;$b;$c"
 }
-
-
 
 exp=$1
 type $exp &> /dev/null && $exp || echo "\"$exp\" is not defined."

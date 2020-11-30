@@ -16,6 +16,10 @@ from torch import nn, optim
 import dill
 from tensorboardX import SummaryWriter
 
+#import torch.cuda.profiler as profiler
+#import pyprof
+#pyprof.init()
+
 import model
 import loss
 from data import *
@@ -24,21 +28,6 @@ from log import *
 import util
 
 from pytorch3d import transforms as transforms3D
-
-def print_epoch_stats(epoch, train_loss, val_loss, metric_groups):
-    #out = "Ep {}, tr loss {:.4f}, val loss {:.4f}, ".format(epoch, train_loss, val_loss)
-    out = ""
-    for metrics in metric_groups:
-        for k in metrics.keys():
-            out += k + " "
-        for v in metrics.values():
-            #print(k, type(v))
-            if isinstance(v, (float, np.float32)):
-                out += "{:.4f} ".format(v)
-            else:
-                out += "{} ".format(v)
-
-    print(out)            
 
 def load_model(checkpoint_path):
     checkpoint = torch.load(checkpoint_path)
@@ -55,15 +44,25 @@ def save_checkpoint(model, optimizer, epoch, save_chkp=True, save_best=False):
     if save_best:
         torch.save(checkpoint, os.path.join(args.log, 'best_model_val.tar'), pickle_module=dill)
 
+# Remove args usage
 def compute_loss(model, data, results, rec_mode, rep_cons, num_scales,
     weight_ds, ds_at_level, weight_ofs, ofs_sm_alpha,
-    weight_dc, weight_fc, weight_sc, softmin_beta, norm_op, 
+    weight_dc, weight_fc, weight_sc, 
+    softmin_beta, norm_op, params_qt,
     weight_ec, ec_mode, weight_pl, 
     log_misc, log_depth, log_flow, 
     it, epoch, writer):
 
     if rep_cons:
-        rec_loss, res, err, pooled_err = loss.representation_consistency(results, weight_dc, weight_fc, weight_sc, softmin_beta, norm_op, rec_mode=rec_mode, return_residuals=True)
+        rec_loss, res, err, pooled_err = loss.representation_consistency(results, 
+                                            weight_dc, 
+                                            weight_fc, 
+                                            weight_sc, 
+                                            softmin_beta, 
+                                            norm_op, 
+                                            params_qt,
+                                            rec_mode=rec_mode, 
+                                            return_residuals=True)
         if log_depth or log_flow:
             log_results(writer, seq_len, results, res, err, pooled_err, norm_op, epoch=epoch, log_depth=log_depth, log_flow=log_flow)
     else:
@@ -80,9 +79,25 @@ def compute_loss(model, data, results, rec_mode, rep_cons, num_scales,
 
     ds_loss = torch.zeros((1,), dtype=torch.float)
     if args.weight_ds > 0:
-        ds_loss = loss.disp_smoothness(results.disps_pyr, data, args.ds_at_level, num_scales, order=2)
+        ds_loss = loss.normalized_smoothness(results.disps_pyr, data, args.ds_at_level, num_scales, order=2)
         ds_loss *= args.weight_ds 
         batch_loss += ds_loss
+
+    ps_loss = torch.zeros((1,), dtype=torch.float)
+    if args.loss_params_sm > 0:
+
+        # joining batch and rec dimensions
+        flattened_params_pyr = []
+        flattened_gt_imgs_pyr = []
+        for i in range(len(results.extra_out_pyr)):
+            _, _, c, h, w = results.extra_out_pyr[i].shape
+            flattened_params_pyr.append(results.extra_out_pyr[i].view(-1, c, h, w))
+            _, _, c, h, w = results.gt_imgs_pyr[i].shape
+            flattened_gt_imgs_pyr.append(results.gt_imgs_pyr[i].view(-1, c, h, w))
+
+        ps_loss = loss.normalized_smoothness(flattened_params_pyr, flattened_gt_imgs_pyr, -1, num_scales, order=1)
+        ps_loss *= args.loss_params_sm
+        batch_loss += ps_loss
 
     ofs_loss = torch.zeros((1,), dtype=torch.float)
     if args.weight_ofs > 0:
@@ -107,6 +122,7 @@ def compute_loss(model, data, results, rec_mode, rep_cons, num_scales,
         writer.add_scalars('loss/batch', {'rec':rec_loss.item(), 
                                             'ds': ds_loss.item(),
                                             'ofs': ofs_loss.item(),
+                                            'pas': ps_loss.item(),
                                             'ec': ec_loss.item(),
                                             'pl': percept_loss.item(),
                                             'all': batch_loss.item()}, it)
@@ -135,7 +151,8 @@ if __name__ == '__main__':
     #parser = argparse.ArgumentParser()
     parser = configargparse.ArgParser()
 
-    ''' TODO 
+    ''' 
+    TODO 
     parser.add_argument('-s', '--seq_len', type=int, default=3)
     parser.add_argument('-h', '--height', type=int, default=128)
     parser.add_argument('-w', '--width' type=int, default=416)
@@ -159,6 +176,7 @@ if __name__ == '__main__':
     parser.add_argument('--pred-disp', action='store_true')
     parser.add_argument('--weight-ds', type=float, default=1e-2)
     parser.add_argument('--ds-at-level', type=int, default=-1) # -1 = all levels
+    parser.add_argument('--depth-occ', type=str, default='outfov', choices=['outfov', 'outfov_overlap'] ) # -1 = all levels
 
     parser.add_argument('--multi-flow', action='store_true') #multi-frame
     parser.add_argument('--stack-flows', action='store_true') #stack motion ins
@@ -192,6 +210,9 @@ if __name__ == '__main__':
     parser.add_argument('--loss', default='l1') # l1, student, charbonnier, cauchy, general adaptive
     parser.add_argument('--loss-params-type', default='none') # 'none', 'var', 'func'
     parser.add_argument('--loss-params-lb', type=float, default=1e-5) # none, 'var', 'func'
+    parser.add_argument('--loss-aux-weight', type=float, default=1.0)
+    parser.add_argument('--loss-params-sm', type=float, default=0.0)
+    parser.add_argument('--loss-params-qt', type=float, default=0.0)
 
     parser.add_argument('--debug-model', action='store_true') # debug in/out using hooks
     parser.add_argument('--debug-training', action='store_true') # debug trainig process with a few iterations
@@ -241,7 +262,15 @@ if __name__ == '__main__':
     train_loader = torch.utils.data.DataLoader(train_set, args.batch_size, shuffle=True, num_workers=args.workers, pin_memory=True, drop_last=True)
     val_loader = torch.utils.data.DataLoader(val_set, args.batch_size, shuffle=False, num_workers=args.workers, pin_memory=True, drop_last=True)
 
-    norm_op = loss.create_norm_op(args.loss, params_type=args.loss_params_type, params_lb=args.loss_params_lb, num_recs=num_recs, height=height, width=width)
+    norm_op = loss.create_norm_op(
+        args.loss, 
+        params_type=args.loss_params_type, 
+        params_lb=args.loss_params_lb, 
+        aux_weight=args.loss_aux_weight, 
+        num_recs=num_recs, 
+        height=height, 
+        width=width)
+
     norm_op.to(args.device)
 
     if args.load_model is not None:
@@ -252,11 +281,14 @@ if __name__ == '__main__':
             stack_flows=args.stack_flows,
             num_extra_channels=norm_op.num_pred_params, 
             learn_intrinsics=args.learn_intrinsics, 
-
-            norm=args.norm, debug=args.debug_model, 
-            depth_backbone=args.depth_backbone, flow_backbone=args.flow_backbone,
+            norm=args.norm, 
+            debug=args.debug_model, 
+            depth_backbone=args.depth_backbone, 
+            depth_occ=args.depth_occ,
+            flow_backbone=args.flow_backbone,
             dropout=args.dropout, 
-            loss_noaug=args.loss_noaug, larger_pose=args.larger_pose,
+            loss_noaug=args.loss_noaug, 
+            larger_pose=args.larger_pose,
             pred_disp=args.pred_disp)
 
     model = model.to(args.device)
@@ -272,6 +304,7 @@ if __name__ == '__main__':
     start = start_training
     val_gt_depths = []
     val_gt_flows = []
+
     for epoch in range(1, args.epochs + 1):
         start_epoch = time.perf_counter()
 
@@ -291,7 +324,8 @@ if __name__ == '__main__':
 
             batch_loss = compute_loss(model, data, results, args.rec_mode, args.rep_cons, num_scales,
                 args.weight_ds, args.ds_at_level, args.weight_ofs, args.flow_sm_alpha,
-                args.weight_dc, args.weight_fc, args.weight_sc, args.softmin_beta, norm_op, 
+                args.weight_dc, args.weight_fc, args.weight_sc, 
+                args.softmin_beta, norm_op, args.loss_params_qt,
                 args.weight_ec, args.ec_mode, args.weight_pl, 
                 log_misc=True, log_depth=False, log_flow=False, 
                 it=it, epoch=epoch, writer=writer)
@@ -376,7 +410,8 @@ if __name__ == '__main__':
 
                 batch_loss = compute_loss(model, data, results, args.rec_mode, args.rep_cons, num_scales,
                     args.weight_ds, args.ds_at_level, args.weight_ofs, args.flow_sm_alpha, 
-                    args.weight_dc, args.weight_fc, args.weight_sc, args.softmin_beta, norm_op, 
+                    args.weight_dc, args.weight_fc, args.weight_sc, 
+                    args.softmin_beta, norm_op, args.loss_params_qt,
                     args.weight_ec, args.ec_mode, args.weight_pl, 
                     log_misc=False, log_depth=log_depth_results and i == log_idx, log_flow=log_flow_results and i == log_idx,
                     it=it, epoch=epoch, writer=writer)
@@ -407,7 +442,7 @@ if __name__ == '__main__':
         # Log the train and val losses
 
         val_loss /= i
-        writer.add_scalars('loss', {'train':train_loss, 'val':val_loss}, epoch)
+        writer.add_scalars('loss', {'train': train_loss, 'val':val_loss}, epoch)
 
         # Log depth and optical flow metrics
 
@@ -416,7 +451,7 @@ if __name__ == '__main__':
         if log_depth:
             if epoch == 1:
                 val_gt_depths = torch.cat(val_gt_depths, dim=0).squeeze(1)
-
+ 
             val_pred_depths = torch.cat(val_pred_depths, dim=0).squeeze(1)
             metrics += log_depth_metrics(writer, val_gt_depths.numpy(), val_pred_depths.cpu().numpy(), epoch=epoch)
             
