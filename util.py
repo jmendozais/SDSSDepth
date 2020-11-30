@@ -77,6 +77,8 @@ def affine_softplus(x, lo=0, ref=1):
 def cpu_softplus(x):
     if not isinstance(x, np.ndarray):
         x = np.asarray(x)
+    params_init  = 0.5413
+    x += params_init
 
     return np.where(x < 80, np.log(np.exp(x) + 1), x)
 

@@ -7,3 +7,4 @@ tensorboardX
 pyturbojpeg
 efficientnet-pytorch
 configargparse
+lpips

@@ -454,10 +454,10 @@ class UFlowDecoder(nn.Module):
 
         if self.lite_mode:
             self.start_cv_level = 4
-            self.flow_model_multiplier = 0.5
+            self.flow_model_multiplier = 0.3 #0.5 
             self.flow_model_layers = 3
-            self.refinement_model_multiplier = 0.5
-            self.refinement_model_layers = 4
+            self.refinement_model_multiplier = 0.4 #0.5 
+            self.refinement_model_layers = 3 #4
         else:
             self.start_cv_level = 5
             self.flow_model_multiplier = 1

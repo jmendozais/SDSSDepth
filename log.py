@@ -55,7 +55,7 @@ def log_results(writer, seq_len, results, res, err, min_err, loss_op, epoch, log
                  
         writer.add_image('flows', flows_grid, epoch)
         writer.add_image('flow_rec', flow_rec_grid, epoch)
-        writer.add_image('flow_mask', flow_sk_grid, epoch)
+        writer.add_image('flow_mask', flow_mask_grid, epoch)
 
     if res != None:
         res_t = torch.transpose(res[0], 0, 1)
@@ -124,10 +124,9 @@ def log_results(writer, seq_len, results, res, err, min_err, loss_op, epoch, log
         if loss_op.params_type == loss.PARAMS_PREDICTED:
             params = results.extra_out_pyr[0]
 
+            params = torch.transpose(params, 0, 1).cpu()
             lb, ub = torch.min(params), torch.max(params)
 
-            params = torch.transpose(params.cpu(), 0, 1)
-            
             if log_depth:
                 rigid_params = params[:seq_len-1,:cols].reshape(-1, loss_op.num_params, h, w)
                 rigid_params = util.gray_to_rgb(rigid_params, lb=lb, ub=ub)
@@ -164,12 +163,20 @@ def log_results(writer, seq_len, results, res, err, min_err, loss_op, epoch, log
 
 def log_depth_metrics(writer, gt_depths, pred_depths, min_depth=1e-3, max_depth=80, epoch=None):
     pred_depths = kitti_utils.resize_like(pred_depths, gt_depths)
-    scale_factor = depth_utils.compute_scale_factor(pred_depths, gt_depths, min_depth, max_depth)
-    metrics = depth_utils.compute_metrics(pred_depths, gt_depths, min_depth, max_depth, scale_factor)
 
-    for metric, value in metrics.items():
-        writer.add_scalar('depth_metrics/' + metric, value, epoch)
-        writer.add_scalar('depth/scale_factor', scale_factor, epoch)
+    scale_factor = depth_utils.compute_scale_factor(pred_depths, gt_depths, min_depth, max_depth)
+    metrics_sing_scale = depth_utils.compute_metrics(pred_depths, gt_depths, min_depth, max_depth, scale_factor)
+
+    metrics_amb_scale = depth_utils.compute_metrics(pred_depths, gt_depths, min_depth, max_depth)
+
+    for metric, value in metrics_sing_scale.items():
+
+        writer.add_scalars('depth_metrics/' + metric, {'consistent': metrics_sing_scale[metric],
+                                                       'ambiguous': metrics_amb_scale[metric]
+                                                       }, 
+                                                       epoch)
+
+    writer.add_scalar('depth_scale', scale_factor, epoch)
 
     idx = random.randint(0, len(gt_depths) - 1)
     mask = np.logical_and(gt_depths[idx] > min_depth, gt_depths[idx] < max_depth)
@@ -177,10 +184,34 @@ def log_depth_metrics(writer, gt_depths, pred_depths, min_depth=1e-3, max_depth=
     writer.add_histogram('gt_depths', gt_depths[idx][mask], epoch, bins=20)
     writer.add_histogram('pred_depths', pred_depths[idx][mask], epoch, bins=20)
 
-    error_metrics = {'are': metrics['abs_rel'], 'sqre': metrics['sq_rel'], 'rmse': metrics['rmse'], 'lrmse': metrics['log_rmse']}
-    acc_metrics = {'a1': metrics['a1'], 'a2': metrics['a2'], 'a3' : metrics['a3']}
+    error_metrics1 = {
+                     'consistent are': metrics_sing_scale['abs_rel'],
+                     'sqre': metrics_sing_scale['sq_rel'],
+                     'rmse': metrics_sing_scale['rmse'],
+                     'lrmse': metrics_sing_scale['log_rmse']
+                    }
 
-    return [error_metrics, acc_metrics]
+    error_metrics2 = {
+                     'ambiguous are': metrics_amb_scale['abs_rel'],
+                     'sqre': metrics_amb_scale['sq_rel'],
+                     'rmse': metrics_amb_scale['rmse'], 
+                     'lrmse': metrics_amb_scale['log_rmse']
+                    }
+
+
+    acc_metrics1 = {
+                    'a1': metrics_sing_scale['a1'],
+                    'a2': metrics_sing_scale['a2'],
+                    'a3': metrics_sing_scale['a3']
+                  }
+
+    acc_metrics2 = {
+                    'a1': metrics_amb_scale['a1'],
+                    'a2': metrics_amb_scale['a2'],
+                    'a3': metrics_amb_scale['a3']
+                  }
+
+    return [error_metrics1, acc_metrics1, error_metrics2, acc_metrics2]
 
 
 def log_oflow_metrics(writer, gt_flows, pred_flows, epoch):
@@ -206,3 +237,20 @@ def log_params(writer, modules, it):
             writer.add_histogram(name, parameter.detach().cpu().numpy(), it)            
             if parameter.grad != None:
                 writer.add_histogram(name+"_grad", parameter.grad.cpu().numpy(), it)            
+
+def print_epoch_stats(epoch, train_loss, val_loss, metric_groups):
+    #out = "Ep {}, tr loss {:.4f}, val loss {:.4f}, ".format(epoch, train_loss, val_loss)
+    out = ""
+    for metrics in metric_groups:
+        for k in metrics.keys():
+            out += k + " "
+            
+        for v in metrics.values():
+            #print(k, type(v))
+            if isinstance(v, (float, np.float32)):
+                out += "{:.4f} ".format(v)
+            else:
+                out += "{} ".format(v)
+
+    print(out)            
+

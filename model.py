@@ -88,21 +88,20 @@ class BackprojectDepth(nn.Module):
         return cam_coords
 
 class ApplyFlow(nn.Module):
-    def __init__(self, batch_size, height, width):
+    def __init__(self, height, width):
         super(ApplyFlow, self).__init__()
 
-        self.batch_size = batch_size
         self.height = height
         self.width = width
 
         grid = np.meshgrid(range(self.width), range(self.height), indexing='xy')
         coords = np.stack(grid, axis=0).astype(np.float32)
         coords = coords.reshape(2, -1)
+
         self.coords = torch.from_numpy(coords)
         self.coords = torch.unsqueeze(self.coords, 0)
-        self.coords = self.coords.repeat(self.batch_size, 1, 1)
         
-        # dims [b, 2, w*h], coords[:,0,i] in [0, w) , coords[:,1,i] in [0, h)
+        # dims [1, 2, w*h], coords[:,0,i] in [0, w) , coords[:,1,i] in [0, h)
         self.coords = nn.Parameter(self.coords, requires_grad=False)
 
     def forward(self, flow):
@@ -177,6 +176,7 @@ class Model(nn.Module):
         learn_intrinsics=False, 
         norm='bn', 
         depth_backbone='resnet', 
+        depth_occ='outfov',
         flow_backbone='uflow',
         dropout=0.0, 
         upscale_pred=False, larger_pose=False, loss_noaug=False,  
@@ -189,7 +189,9 @@ class Model(nn.Module):
         self.height = height
         self.width = width
         self.num_extra_channels = num_extra_channels
+
         self.pred_disp = pred_disp
+        self.depth_occ = depth_occ
 
         # Improvements
         self.upscale_pred = upscale_pred
@@ -218,7 +220,7 @@ class Model(nn.Module):
             height_i = self.height//(2**i)
             width_i = self.width//(2**i)
             self.ms_backproject.append(BackprojectDepth(self.batch_size * (self.seq_len - 1), height_i, width_i))
-            self.ms_applyflow.append(ApplyFlow(self.batch_size * (self.seq_len - 1), height_i, width_i))
+            self.ms_applyflow.append(ApplyFlow(height_i, width_i))
 
         # Create depth, pose and flow nets
         # Sent model to devices
@@ -370,7 +372,8 @@ elf
             res.sampled_depths_pyr.append(sampled_depths.view(self.batch_size, self.seq_len - 1, 1, h, w))
 
             # visibility mask
-            rigid_mask = torch.logical_and(rigid_mask, res.proj_depths_pyr[-1] < res.sampled_depths_pyr[-1] + 1e-6)
+            if self.depth_occ == 'outfov_overlap':
+                rigid_mask = torch.logical_and(rigid_mask, res.proj_depths_pyr[-1] < res.sampled_depths_pyr[-1] + 1e-6)
             rigid_mask = rigid_mask.view(self.batch_size, self.seq_len - 1, h, w)
 
             res.proj_coords_pyr.append(proj_tgt_cam_coords.view(self.batch_size, self.seq_len - 1, 4, h, w))
