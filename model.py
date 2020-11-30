@@ -286,14 +286,18 @@ elf
         res = Result()
         if self.num_extra_channels:
             res.depths_pyr, res.disps_pyr, extra_depth_pyr, depth_feats = self.depth_net(imgs)
+
+            # TODO: changes on bidir mode
             res.ofs_pyr, extra_ofs_pyr, res.T, res.K_pyr = self.motion_net(motion_ins)
 
             res.extra_out_pyr = []
         else:
             res.depths_pyr, res.disps_pyr, depth_feats = self.depth_net(imgs)
+            # TODO: changes on bidir mode
             res.ofs_pyr,  res.T, res.K_pyr = self.motion_net(motion_ins)
 
         # TODO check consistency with new flow modality
+        # TODO: changes on bidir mode
         for i in range(self.num_scales):
             inv_K = torch.inverse(res.K_pyr[i]) 
             if  self.multiframe_of:
@@ -383,13 +387,12 @@ elf
                 res.sampled_feats_pyr.append(sampled_feats.view(self.batch_size, self.seq_len - 1, num_maps, h, w))
 
             # reconstruct with the optical flow
-
             flow_rec = self.grid_sample(src_imgs, src_pix_coords)
             flow_rec = flow_rec.view(self.batch_size, self.seq_len - 1, 3, h, w)
 
             res.recs_pyr.append(torch.cat([rigid_rec, flow_rec], axis=1))
-
-            res.mask_pyr.append(torch.cat([rigid_mask, rigid_mask], axis=1)) # TODO: change second 
+            res.mask_pyr.append(torch.cat([rigid_mask, rigid_mask], axis=1)) 
+            # TODO: change second 
             # mask by an optical flow based occ mask
 
             # reconstruct with a large
@@ -397,11 +400,6 @@ elf
                 tgt_imgs = F.interpolate(inputs_noaug[i][:,0], size=(h, w), mode='bilinear', align_corners=False)
             else:
                 tgt_imgs = F.interpolate(inputs[i][:,0], size=(h, w), mode='bilinear', align_corners=False)
-
-            #tgt_imgs = torch.unsqueeze(tgt_imgs, 1)
-            #tgt_imgs = tgt_imgs.expand(b, self.seq_len - 1, 3, h, w)
-            #tgt_imgs = tgt_imgs.reshape(b * (self.seq_len - 1), 3, h, w)
-            #tgt_imgs = torch.cat([tgt_imgs, tgt_imgs], axis=1) # duplicate for flow and rigid
 
             res.tgt_imgs_pyr.append(tgt_imgs)
             res.gt_imgs_pyr.append(gt_snippets_from_tgt_imgs(tgt_imgs, self.seq_len))

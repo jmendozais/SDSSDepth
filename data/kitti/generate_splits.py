@@ -62,12 +62,13 @@ def generate_splits(dataset_dir, out_dir):
     test_scene_file = os.path.join(dir_path, 'test_scenes_' + split + '.txt')
 
     with open(test_scene_file, 'r') as f:
-	test_scenes = f.readlines()
+        test_scenes = f.readlines()
+
     test_scenes = [t[:-1] for t in test_scenes]
     frames_by_drive = collect_train_frames(dataset_dir, test_scenes, static_frames, cam_ids)
     
     with open(os.path.join(out_dir, 'train.txt'), 'w') as tf:
-	with open(os.path.join(out_dir, 'val.txt'), 'w') as vf:
+        with open(os.path.join(out_dir, 'val.txt'), 'w') as vf:
             for drive, frames in frames_by_drive.items():
                 num_frames = len(frames)
                 num_train_frames = int(num_frames * 0.9)

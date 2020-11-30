@@ -184,6 +184,9 @@ if __name__ == '__main__':
     parser.add_argument('--learn-intrinsics', action='store_true')
     parser.add_argument('--rep-cons', action='store_true')
     parser.add_argument('--softmin-beta', type=float, default='inf')
+    parser.add_argument('--bidirectional', action='store_true')
+
+    # Architecture config
     parser.add_argument('--norm', default='bn')
 
     parser.add_argument('--loss', default='l1') # l1, student, charbonnier, cauchy, general adaptive
