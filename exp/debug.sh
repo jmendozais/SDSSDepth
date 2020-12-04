@@ -1,7 +1,7 @@
 #!/bin/bash  -i
 BASH_ENV="~/.bashrc"
-#DATADIR=$(pwd)/out 
-DATADIR='/data/ra153646/robustness'
+DATADIR=$(pwd)/out 
+#DATADIR='/data/ra153646/robustness'
 
 #ename=debug-epipolar-detach
 #CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename -b 2 --weight-ds 1e-1 --weight-ofs 1e-2 --weight-ec 1 --ec-mode 'samp' --weight-dc 0 --weight-fc 0 --weight-sc 1 --weight-pl 0 --epoch 15 --learn-intrinsics --flow-ok --rep-cons  --loss laplacian_nll --loss-params-type var
@@ -86,21 +86,27 @@ CUDA_VISIBLE_DEVICES=$dev python $(pwd)/eval_depth.py -c ${DATADIR}/$ename/best_
 }
 
 flow() {
-dev=1
-ename=debug-flow-uflow3
+dev=0
+ename=debug-flow-tartan
 # Kitti
 #CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename-kitti --loss l1 --flow-sm-alpha 150 --weight-ds 0 -b 4 --epoch 15 -l 5e-5 --rec-mode flow --rep-cons --softmin-beta 0 --norm bn --weight-ofs 1e-2 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --debug-training --verbose 0
 
-CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename-kitti --config-file $(pwd)/misc/kitti.cfg --loss l1 --weight-ds 0 -b 4 --epoch 2 -l 5e-5 --rec-mode flow --rep-cons --softmin-beta 0 --norm bn --weight-ofs 1e-2 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --debug-training --verbose 0
-CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename-sintel-clean --load-model ${DATADIR}/$ename-kitti/best_model_val.tar --config-file $(pwd)/misc/sintel_clean.cfg --loss l1 --weight-ds 0 -b 4 --epoch 10 -l 5e-5 --rec-mode flow --rep-cons --softmin-beta 0 --norm bn --weight-ofs 1e-2 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --debug-training
-CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename-sintel-final --load-model ${DATADIR}/$ename-kitti/best_model_val.tar --config-file $(pwd)/misc/sintel_final.cfg --loss l1 --weight-ds 0 -b 4 --epoch 10 -l 5e-5 --rec-mode flow --rep-cons --softmin-beta 0 --norm bn --weight-ofs 1e-2 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --debug-training
+#CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename-kitti --config-file $(pwd)/misc/kitti.cfg --loss l1 --weight-ds 0 -b 4 --epoch 2 -l 5e-5 --rec-mode flow --rep-cons --softmin-beta 0 --norm bn --weight-ofs 1e-2 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --debug-training --verbose 0
+#CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename-sintel-clean --load-model ${DATADIR}/$ename-kitti/best_model_val.tar --config-file $(pwd)/misc/sintel_clean.cfg --loss l1 --weight-ds 0 -b 4 --epoch 10 -l 5e-5 --rec-mode flow --rep-cons --softmin-beta 0 --norm bn --weight-ofs 1e-2 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --debug-training
+#CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename-sintel-final --load-model ${DATADIR}/$ename-kitti/best_model_val.tar --config-file $(pwd)/misc/sintel_final.cfg --loss l1 --weight-ds 0 -b 4 --epoch 10 -l 5e-5 --rec-mode flow --rep-cons --softmin-beta 0 --norm bn --weight-ofs 1e-2 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --debug-training
 
 # Sintel
 #train_clean="CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename-sintel-clean --log-preds --load-model ${DATADIR}/$ename-kitti/best_model_val.tar --config-file misc/sintel_clean.cfg --loss l1 --backbone resnet --rec-mode flow --weight-ds 0 -b 12 --epoch 15 -l 5e-5 --rep-cons --softmin-beta 0 --norm bn --weight-ofs 1e-2 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --debug-training"
 #train_final="CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename-sintel-final --log-preds --load-model ${DATADIR}/$ename-kitti/best_model_val.tar --config-file misc/sintel_final.cfg --loss l1 --backbone resnet --rec-mode flow --weight-ds 0 -b 12 --epoch 15 -l 5e-5 --rep-cons --softmin-beta 0 --norm bn --weight-ofs 1e-2 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --debug-training"
 #train_clean='CUDA SOMETHING python
 
-echo "$train_clean;$train_final"
+# tartan
+
+#CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename-tartan --loss l1 --flow-sm-alpha 150 --config-file $(pwd)/misc/tartanair.cfg --weight-ds 0 -b 4 --epoch 15 -l 5e-5 --rec-mode flow --rep-cons --softmin-beta 0 --norm bn --weight-ofs 1e-2 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --debug-training --verbose 0
+#echo CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename-tartan --loss l1 --flow-sm-alpha 150 --config-file $(pwd)/misc/tartanair.cfg --weight-ds 0 -b 4 --epoch 15 -l 5e-5 --rec-mode flow --rep-cons --softmin-beta 0 --norm bn --weight-ofs 1e-2 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --debug-training --verbose 0
+CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename-tartan --loss l1 --flow-sm-alpha 150 --config-file $(pwd)/misc/tartanair.cfg --stack-flows --multi-flow --weight-ds 0 -b 8 --epoch 15 -l 1e-5 --rec-mode flow --rep-cons --softmin-beta 0 --norm bn --weight-ofs 1e-2 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --debug-training --workers 0 --height 224 --width 416
+
+#echo "$train_clean;$train_final"
 #CUDA_VISIBLE_DEVICES=$dev python $(pwd)/eval_depth.py -c ${DATADIR}/$ename/best_model_val.tar -i $(pwd)/data/kitti/test_files_eigen.txt --single-scalor --predict --measure 
 }
 

@@ -28,6 +28,7 @@ from pycls.models.regnet import RegNet
 from pycls.models.anynet import get_stem_fun
 
 from util import *
+from rec_utils import *
 from normalization import *
 
 ARCH_REGNET = 0
@@ -386,7 +387,8 @@ class Flow2Warp(nn.Module):
     def forward(self, flow):
         '''
         Args:
-            flow: A tensor of shape [b, 2, h, w]. the coordinates 
+            flow: A tensor of shape [b, 2, h, w]. the coordinates. The first and second coordinates
+            keep the location on the x and y-axis respectively.
 
         Returns:
             A tensor containing the sum of grid + flow. 
@@ -411,24 +413,6 @@ def flow_to_warp(flow):
 
     return grid + flow
  '''
-
-def grid_sample(x, pix_coords):
-    '''
-    pix_coords is the warp
-    '''
-
-    # normalized coords
-    # normalized flows
-    _, _, h, w = x.size()
-    pix_coords = pix_coords.permute(0, 2, 3, 1)
-    pix_coords[:,:,:,0] /= (w - 1)
-    pix_coords[:,:,:,1] /= (h - 1)
-    pix_coords = (pix_coords - 0.5) * 2
-
-    # Alternative: zero out the input values at invalid coordinates
-
-    return F.grid_sample(x, pix_coords, padding_mode='border', align_corners=False)
-
 
 def upsample(x, scale_factor=2, is_flow=False):
 

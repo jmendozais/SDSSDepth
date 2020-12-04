@@ -37,7 +37,7 @@ class Sintel(Dataset):
             ):
         super(Sintel, self).__init__(data_dir, frames_file, height, width, num_scales, seq_len, is_training, load_depth=False, load_flow=load_flow)
         
-    def get_flow(self, idx):
+    def _get_flow(self, idx):
         path = self.filenames[idx].decode('utf-8')
 
         of_path = path.replace('final', 'flow')

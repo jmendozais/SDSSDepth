@@ -11,7 +11,9 @@ import numpy as np
 from data import *
 from net.depth_net import *
 from net.motion_net import *
+from net.base_net import *
 from util import any_nan
+from rec_utils import *
 
 # Adapted from monodepth2
 
@@ -87,38 +89,8 @@ class BackprojectDepth(nn.Module):
 
         return cam_coords
 
-class ApplyFlow(nn.Module):
-    def __init__(self, height, width):
-        super(ApplyFlow, self).__init__()
-
-        self.height = height
-        self.width = width
-
-        grid = np.meshgrid(range(self.width), range(self.height), indexing='xy')
-        coords = np.stack(grid, axis=0).astype(np.float32)
-        coords = coords.reshape(2, -1)
-
-        self.coords = torch.from_numpy(coords)
-        self.coords = torch.unsqueeze(self.coords, 0)
-        
-        # dims [1, 2, w*h], coords[:,0,i] in [0, w) , coords[:,1,i] in [0, h)
-        self.coords = nn.Parameter(self.coords, requires_grad=False)
-
-    def forward(self, flow):
-        '''
-        Args:
-          flow: a tensor with the optical flow fields with displacements in pixel units. [b, num_src * 2, h, w]
-          TODO: Its ok to have displacements in pixel units? it can be normalized to be invariante to the size of the imput?
-        Returns:
-          flow coordinates: a tensor of shape [b = bs*num_srcs, 2, -1] (batch_size = b * num_srcs). 
-        '''
-        return flow.view(self.batch_size, 2, -1) + self.coords
-
-
 def forward_hook(module, inp, output):
     if not isinstance(output, tuple) and not isinstance(output, list):
-        outputs = [output]
-    else:
         outputs = output
 
     for i, out in enumerate(outputs):
@@ -130,7 +102,6 @@ def forward_hook(module, inp, output):
                 if nan_mask.any():
                     print("forward hook: Found NaN in", module.__class__.__name__)
                     raise RuntimeError(f"Found NAN in output {i} at indices: ", nan_mask.nonzero(), "where:", out2[nan_mask.nonzero()[:, 0].unique(sorted=True)])
-            
 
 def backward_hook(module, inp, output):
     #print("call:", type(inp), type(output), module.__class__.__name__)
@@ -214,13 +185,13 @@ class Model(nn.Module):
         self.depth_net = DepthNet(norm=norm, width=self.width, height=self.height, num_ext_channels=num_extra_channels, backbone=depth_backbone, dropout=dropout, pred_disp=pred_disp)
         self.motion_net = MotionNet(self.seq_len, self.width, self.height, self.num_motion_inputs, self.stack_flows, learn_intrinsics=learn_intrinsics, norm=norm, num_ext_channels=num_extra_channels, backbone=flow_backbone, dropout=dropout, larger_pose=larger_pose)
 
-        self.ms_backproject = nn.ModuleList()
-        self.ms_applyflow = nn.ModuleList()
+        self.backproject = nn.ModuleList()
+        self.flow_to_warp = nn.ModuleList()
         for i in range(self.num_scales):
             height_i = self.height//(2**i)
             width_i = self.width//(2**i)
-            self.ms_backproject.append(BackprojectDepth(self.batch_size * (self.seq_len - 1), height_i, width_i))
-            self.ms_applyflow.append(ApplyFlow(height_i, width_i))
+            self.backproject.append(BackprojectDepth(self.batch_size * (self.seq_len - 1), height_i, width_i))
+            self.flow_to_warp.append(Flow2Warp(height_i, width_i))
 
         # Create depth, pose and flow nets
         # Sent model to devices
@@ -360,11 +331,11 @@ elf
             src_imgs = src_imgs.reshape(-1, 3, h, w)
 
             # reconstruct with the rigid flow
-            tgt_cam_coords = self.ms_backproject[i](tgt_depths, res.inv_K_pyr[i])
+            tgt_cam_coords = self.backproject[i](tgt_depths, res.inv_K_pyr[i])
             proj_tgt_cam_coords, src_pix_coords = self.transform_and_project(tgt_cam_coords, res.K_pyr[i], res.T)
             src_pix_coords = src_pix_coords.view(self.batch_size * (self.seq_len - 1), 2, h, w)
 
-            rigid_rec, rigid_mask = self.grid_sample(src_imgs, src_pix_coords, return_mask=True)
+            rigid_rec, rigid_mask = grid_sample(src_imgs, src_pix_coords, return_mask=True)
             rigid_rec = rigid_rec.view(self.batch_size, self.seq_len - 1, 3, h, w)
             rigid_mask = rigid_mask.view(self.batch_size, self.seq_len - 1, 1, h, w)
 
@@ -372,7 +343,7 @@ elf
             proj_depths = proj_tgt_cam_coords.view(-1, 4, h, w)[:,2:3] # shape??
             res.proj_depths_pyr.append(proj_depths.view(self.batch_size, self.seq_len - 1, 1, h, w))
 
-            sampled_depths = self.grid_sample(src_depths, src_pix_coords)
+            sampled_depths = grid_sample(src_depths, src_pix_coords)
             res.sampled_depths_pyr.append(sampled_depths.view(self.batch_size, self.seq_len - 1, 1, h, w))
 
             # visibility mask
@@ -381,20 +352,25 @@ elf
             rigid_mask = rigid_mask.view(self.batch_size, self.seq_len - 1, h, w)
 
             res.proj_coords_pyr.append(proj_tgt_cam_coords.view(self.batch_size, self.seq_len - 1, 4, h, w))
-            src_cam_coords = self.ms_backproject[i](src_depths, res.inv_K_pyr[i])
+            src_cam_coords = self.backproject[i](src_depths, res.inv_K_pyr[i])
             res.sampled_coords_pyr.append(src_cam_coords.view(self.batch_size, self.seq_len - 1, 4, h, w))
 
             if i > 0:
-                sampled_feats = self.grid_sample(src_feats, src_pix_coords)
+                sampled_feats = grid_sample(src_feats, src_pix_coords)
                 res.feats_pyr.append(tgt_feats.view(self.batch_size, self.seq_len - 1, num_maps, h, w))
                 res.sampled_feats_pyr.append(sampled_feats.view(self.batch_size, self.seq_len - 1, num_maps, h, w))
 
             # reconstruct with the optical flow
-            flow_rec = self.grid_sample(src_imgs, src_pix_coords)
+            src_pix_coords = self.flow_to_warp[i](res.ofs_pyr[i])
+
+            #src_pix_coords = src_pix_coords.view(self.batch_size * (self.seq_len - 1), 2, h, w)
+
+            flow_rec, flow_mask = grid_sample(src_imgs, src_pix_coords, return_mask=True)
             flow_rec = flow_rec.view(self.batch_size, self.seq_len - 1, 3, h, w)
+            flow_mask = rigid_mask.view(self.batch_size, self.seq_len - 1, h, w)
 
             res.recs_pyr.append(torch.cat([rigid_rec, flow_rec], axis=1))
-            res.mask_pyr.append(torch.cat([rigid_mask, rigid_mask], axis=1)) 
+            res.mask_pyr.append(torch.cat([rigid_mask, flow_mask], axis=1)) 
             # TODO: change second 
             # mask by an optical flow based occ mask
 
@@ -422,50 +398,10 @@ elf
           proj_cam_coords: a tensor of shape [b, 4, h*w]
           pix_coords a tensor with a pix of coords [b, 3, h*w]
         '''
+        # TODO: Why we dont use KT?
         # KT = torch.matmul(K, T)[:, :3, :]
         proj_cam_coords = torch.matmul(T, cam_coords)
         # pix_coords = torch.matmul(KT, cam_coords)
         pix_coords = torch.matmul(K[:, :3, :], proj_cam_coords)
         pix_coords = pix_coords[:, :2, :] / (pix_coords[:, 2, :].unsqueeze(1) + 1e-6)
         return proj_cam_coords, pix_coords
-
-    def grid_sample(self, imgs, pix_coords, return_mask=False):
-        _, _, h, w = imgs.size()
-        pix_coords = pix_coords.permute(0, 2, 3, 1)
-        pix_coords[:,:,:,0] /= (w - 1)
-        pix_coords[:,:,:,1] /= (h - 1)
-        pix_coords = (pix_coords - 0.5) * 2
-
-        if return_mask:
-            mask = torch.logical_and(pix_coords[:,:,:,0] > -1, pix_coords[:,:,:,1] > -1)
-            mask = torch.logical_and(mask, pix_coords[:,:,:,0] < 1)
-            mask = torch.logical_and(mask, pix_coords[:,:,:,1] < 1)
-            # Monodepth2 used the default of old pytorch: align corners = true
-            return F.grid_sample(imgs, pix_coords, padding_mode='border', align_corners=False), mask 
-        else:
-            return F.grid_sample(imgs, pix_coords, padding_mode='border', align_corners=False)
-
-def test_model():
-    height=64#128
-    width=192#416
-    num_scales=4
-    seq_len=3
-    batch_size=2
-    train_set = Dataset('./data/moving_exp/sample/ytwalking_frames', './data/moving_exp/sample/ytwalking_frames/clips.txt', height=height, width=width, num_scales=num_scales, seq_len=seq_len)
-
-    train_loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=2, pin_memory=True, drop_last=True)
-
-    model = Model(batch_size, num_scales, seq_len, height, width)
-
-    for i, data in enumerate(train_loader, 0):
-        with torch.no_grad():
-            _ = model(data)
-            break
-
-def imshow(img):
-    tmp = VF.to_pil_image(img)
-    tmp.show()
-    input()
-
-if __name__ == '__main__':
-    test_model()

@@ -103,7 +103,6 @@ class Dataset(data.Dataset):
         # OpenCV mode
         #target = cv2.imread(self.filenames[index])
         #target = cv2.cvtColor(target, cv2.COLOR_BGR2RGB)
-        #print("opencv", target.shape, target[:,:,0].mean())
 
         with open(self.filenames[index], 'rb') as f:
             target = self.reader.decode(f.read(), pixel_format=0)
@@ -112,7 +111,7 @@ class Dataset(data.Dataset):
 
         target = Image.fromarray(target)
         target = target.resize((self.width, self.height), resample=Image.BILINEAR)
-
+    
         #print('----------')
         #print(self.filenames[index])
 
@@ -133,8 +132,6 @@ class Dataset(data.Dataset):
 
         snippet = [target] + sources
         snippet_noaug = [target] + sources
-
-        #intrinsics = ...
 
         #print('loading', time.perf_counter() - start)
 
@@ -195,6 +192,7 @@ class Dataset(data.Dataset):
         for i in range(len(snippet)):
             snippet[i] = func.to_tensor(snippet[i]) 
             snippet[i] = func.normalize(snippet[i], mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+
         ms_snippet[0] = torch.stack(snippet)
 
         for i in range(len(snippet_noaug)):
@@ -204,7 +202,7 @@ class Dataset(data.Dataset):
 
         # Load depth
         if self.load_depth:
-            depth = self.get_depth(index)
+            depth = self._get_depth(index)
             depth = cv2.resize(depth, (1242, 375), interpolation=cv2.INTER_NEAREST)
             depth = np.expand_dims(depth, axis=2) 
             depth = func.to_tensor(depth)
@@ -212,7 +210,7 @@ class Dataset(data.Dataset):
             ms_snippet['depth'] = depth
 
         if self.load_flow:
-            flow = self.get_flow(index)
+            flow = self._get_flow(index)
             # resize and format
             flow = func.to_tensor(flow) # [num_src, 2, h, w]
             ms_snippet['flow'] = flow
@@ -221,13 +219,13 @@ class Dataset(data.Dataset):
         #print("read {:.4f} ({:.2f}%), read + resize: {:.4f} ({:.2f}), getittem {:.4f}".format(read_acc, read_acc/total_time, load_time, load_time/total_time, total_time))
         return ms_snippet, ms_snippet_noaug
 
-    def get_depth(self, idx):
+    def _get_depth(self, idx):
         raise NotImplementedError()
 
-    def get_flow(self, idx):
+    def _get_flow(self, idx):
         raise NotImplementedError()
 
-    def get_intrinsics(self, idx):
+    def _get_intrinsics(self, idx):
         raise NotImplementedError()
 
     def __len__(self):

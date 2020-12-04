@@ -232,7 +232,6 @@ def representation_consistency(
 
             if params_qt > 0.0:
                 bs, nr, _, _, _ = extra.shape
-                extra = 
                 extra_qt = torch.quantile(extra.view(bs, nr, -1, 1, 1), params_qt, dim=2, keepdim=True)
                 extra = torch.where(extra < extra_qt, extra_qt, extra)
                 if rec_mode == 'depth': 

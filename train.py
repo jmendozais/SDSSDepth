@@ -154,12 +154,12 @@ if __name__ == '__main__':
     ''' 
     TODO 
     parser.add_argument('-s', '--seq_len', type=int, default=3)
-    parser.add_argument('-h', '--height', type=int, default=128)
-    parser.add_argument('-w', '--width' type=int, default=416)
     '''
+    parser.add_argument('--height', type=int, default=128)
+    parser.add_argument('-w', '--width', type=int, default=416)
     parser.add_argument('--config-file', is_config_file=True)
 
-    parser.add_argument('--dataset', default='kitti', choices=['kitti', 'sintel'])
+    parser.add_argument('--dataset', default='kitti', choices=['kitti', 'sintel', 'tartanair'])
     parser.add_argument('--dataset-dir', default='/data/ra153646/datasets/KITTI/raw_data')
     parser.add_argument('--train-file', default='/home/phd/ra153646/robustness/robustdepthflow/data/kitti/train.txt')
     parser.add_argument('--val-file', default='/home/phd/ra153646/robustness/robustdepthflow/data/kitti/val.txt')
@@ -191,7 +191,7 @@ if __name__ == '__main__':
     parser.add_argument('--weight-ec', type=float, default=1e-1)
     parser.add_argument('--ec-mode', type=str, default='alg', choices=['alg', 'samp'])
 
-    parser.add_argument('--device', type=str, default='cuda')
+    parser.add_argument('--device', type=str, default='cuda:0')
     parser.add_argument('--workers', type=int, default=4)
     parser.add_argument('--ckp-freq', type=int, default=5)
     parser.add_argument('--log', type=str, default='sample-exp')
@@ -251,12 +251,10 @@ if __name__ == '__main__':
 
     num_scales=4
     seq_len=3
-    height=128
-    width=416
     num_recs = (seq_len - 1) * (2 if args.rec_mode == 'joint' else 1)
 
-    train_set = create_dataset(args.dataset, args.dataset_dir, args.train_file, height=height, width=width, num_scales=num_scales, seq_len=seq_len, is_training=True)
-    val_set = create_dataset(args.dataset, args.dataset_dir, args.val_file, height=height, width=width, 
+    train_set = create_dataset(args.dataset, args.dataset_dir, args.train_file, height=args.height, width=args.width, num_scales=num_scales, seq_len=seq_len, is_training=True)
+    val_set = create_dataset(args.dataset, args.dataset_dir, args.val_file, height=args.height, width=args.width, 
         num_scales=num_scales, seq_len=seq_len, is_training=False, load_depth=log_depth, load_flow=log_flow)
 
     train_loader = torch.utils.data.DataLoader(train_set, args.batch_size, shuffle=True, num_workers=args.workers, pin_memory=True, drop_last=True)
@@ -268,15 +266,17 @@ if __name__ == '__main__':
         params_lb=args.loss_params_lb, 
         aux_weight=args.loss_aux_weight, 
         num_recs=num_recs, 
-        height=height, 
-        width=width)
+        height=args.height, 
+        width=args.width)
 
     norm_op.to(args.device)
 
     if args.load_model is not None:
         model = load_model(args.load_model)
     else:
-        model = model.Model(args.batch_size, num_scales, seq_len, height, width, 
+        model = model.Model(args.batch_size, num_scales, seq_len, 
+            height=args.height, 
+            width=args.width, 
             multiframe_of=args.multi_flow,
             stack_flows=args.stack_flows,
             num_extra_channels=norm_op.num_pred_params, 
@@ -428,10 +428,10 @@ if __name__ == '__main__':
                  
                 if log_flow:
                     if epoch == 1:
-                        val_gt_flows.append(data['flow'])
+                        val_gt_flows.append(data['flow'].numpy().transpose((0,2,3,1)))
 
                     idx_fw_flow = [int((seq_len - 1)/2 + (seq_len - 1) * i) for i in range(args.batch_size)] # just the forward flows
-                    val_pred_flows.append(results.ofs_pyr[0][idx_fw_flow])
+                    val_pred_flows.append(results.ofs_pyr[0][idx_fw_flow].cpu().numpy())
 
             #print('ops val', time.perf_counter() - start)
             #start = time.perf_counter()
@@ -456,11 +456,7 @@ if __name__ == '__main__':
             metrics += log_depth_metrics(writer, val_gt_depths.numpy(), val_pred_depths.cpu().numpy(), epoch=epoch)
             
         if log_flow:
-            if epoch == 1:
-                val_gt_flows = torch.cat(val_gt_flows, dim=0)#.squeeze(1)
-
-            val_pred_flows = torch.cat(val_pred_flows, dim=0)#.squeeze(1)
-            metrics += log_oflow_metrics(writer, val_gt_flows.numpy(), val_pred_flows.cpu().numpy(), epoch=epoch)
+            metrics += log_oflow_metrics(writer, val_gt_flows, val_pred_flows, epoch=epoch)
         
         # Save checkpoint
 

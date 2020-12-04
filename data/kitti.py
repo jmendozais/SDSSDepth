@@ -41,7 +41,7 @@ class Kitti(Dataset):
             self.files = kitti_utils.read_text_lines(frames_file)
             self.gt_files, self.gt_calib, self.im_sizes, self.im_files, self.cams_ids = kitti_utils.read_file_data(self.files, data_dir)
 
-    def get_depth(self, idx):
+    def _get_depth(self, idx):
         camera_id = self.cams_ids[idx]  # 2 is left, 3 is right
         depth = kitti_utils.generate_depth_map(self.gt_calib[idx], 
                                    self.gt_files[idx], 

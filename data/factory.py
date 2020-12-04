@@ -1,6 +1,7 @@
 from .kitti import Kitti
 from .dataset import Dataset
 from .sintel import Sintel
+from .tartanair import TartanAir
 
 def create_dataset(dataset, data_dir, frames_file,
             height=128, width=416, num_scales=4,
@@ -17,6 +18,12 @@ def create_dataset(dataset, data_dir, frames_file,
             print("WARNING: Depth map loading not implemented on sintel")
             #raise NotImplementedError("Depth map loading not implemented on Sintel dataset")
         return Sintel(data_dir, frames_file, height, width, num_scales, seq_len, is_training, load_flow)
+
+    elif dataset == 'tartanair':
+        if load_depth:
+            print("WARNING: Depth map loading not implemented on sintel")
+            #raise NotImplementedError("Depth map loading not implemented on Sintel dataset")
+        return TartanAir(data_dir, frames_file, height, width, num_scales, seq_len, is_training, load_depth=load_depth, load_flow=load_flow)
 
     else:
         raise NotImplementedError("{} not implemented".format(dataset))
