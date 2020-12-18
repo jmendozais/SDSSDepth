@@ -42,8 +42,28 @@ d="CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --loss l1 --weight-ds 0 -
 #ename=robustv2-flow-only-avg-rep-fs1e-2-lr5e-6-resnet
 #d="CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename --loss l1 --backbone resnet --weight-ds 0 -b 12 --epoch 15 -l 5e-6 --rec-mode flow --rep-cons --softmin-beta 0 --norm bn --weight-ofs 0 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 &>$(pwd)/log/$ename.txt; CUDA_VISIBLE_DEVICES=$dev python $(pwd)/eval_depth.py -c ${DATADIR}/$ename/best_model_val.tar -i $(pwd)/data/kitti/test_files_eigen.txt --single-scalor --predict --measure &>>$(pwd)/log/$ename.txt"
 
-echo "$b;$c;$d"
-ded $CONTAINER "$b;$c;$d"
+echo "$a;$b;$c;$d"
+ded $CONTAINER "$a;$b;$c;$d"
+}
+
+avgrep_flow_sm() {
+dev=0
+
+ename=flowv2-resnet-avgrep-fs2-lr5e-5-b12-ofs1
+a="CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --loss l1 --weight-ds 0 --weight-ofs 1 --flow-sm-alpha 150 --stack-flows --multi-flow -b 12 --epoch 20 -l 5e-5 --rec-mode flow --rep-cons --softmin-beta 0 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --log ${DATADIR}/$ename --config-file $(pwd)/misc/tartanair.cfg &>$(pwd)/log/$ename.txt; CUDA_VISIBLE_DEVICES=$dev python $(pwd)/eval_flow.py -c ${DATADIR}/$ename/best_model_val.tar --config-file $(pwd)/misc/tartanair.cfg &>>$(pwd)/log/$ename.txt"
+
+ename=flowv2-resnet-avgrep-fs2-lr5e-5-b12-ofs1e-1
+b="CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --loss l1 --weight-ds 0 --weight-ofs 1e-1 --flow-sm-alpha 150 --stack-flows --multi-flow -b 12 --epoch 20 -l 5e-5 --rec-mode flow --rep-cons --softmin-beta 0 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --log ${DATADIR}/$ename --config-file $(pwd)/misc/tartanair.cfg &>$(pwd)/log/$ename.txt; CUDA_VISIBLE_DEVICES=$dev python $(pwd)/eval_flow.py -c ${DATADIR}/$ename/best_model_val.tar --config-file $(pwd)/misc/tartanair.cfg &>>$(pwd)/log/$ename.txt"
+
+ename=flowv2-resnet-avgrep-fs2-lr5e-5-b12-ofs1e-2
+c="CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --loss l1 --weight-ds 0 --weight-ofs 1e-2 --flow-sm-alpha 150 --stack-flows --multi-flow -b 12 --epoch 20 -l 5e-5 --rec-mode flow --rep-cons --softmin-beta 0 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --log ${DATADIR}/$ename --config-file $(pwd)/misc/tartanair.cfg &>$(pwd)/log/$ename.txt; CUDA_VISIBLE_DEVICES=$dev python $(pwd)/eval_flow.py -c ${DATADIR}/$ename/best_model_val.tar --config-file $(pwd)/misc/tartanair.cfg &>>$(pwd)/log/$ename.txt"
+
+ename=flowv2-resnet-avgrep-fs2-lr5e-5-b12-ofs10
+d="CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --loss l1 --weight-ds 0 --weight-ofs 10 --flow-sm-alpha 150 --stack-flows --multi-flow -b 12 --epoch 20 -l 5e-5 --rec-mode flow --rep-cons --softmin-beta 0 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --log ${DATADIR}/$ename --config-file $(pwd)/misc/tartanair.cfg &>$(pwd)/log/$ename.txt; CUDA_VISIBLE_DEVICES=$dev python $(pwd)/eval_flow.py -c ${DATADIR}/$ename/best_model_val.tar --config-file $(pwd)/misc/tartanair.cfg &>>$(pwd)/log/$ename.txt"
+
+
+echo "$a;$b;$c;$d"
+ded $CONTAINER "$a;$b;$c;$d"
 }
 
 flow_uflow() {

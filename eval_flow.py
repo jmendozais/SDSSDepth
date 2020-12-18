@@ -81,6 +81,7 @@ if __name__ == '__main__':
     for i, data_pair in enumerate(test_loader, 0):
         with torch.no_grad():    
             data, data_noaug = data_pair
+            bs, _, _, _, _ = data[0].shape
 
             for j in range(num_scales):
                 data[j] = data[j].to(args.device)
@@ -94,7 +95,8 @@ if __name__ == '__main__':
                 # TODO: Can we store the whole test set on memory?
                 preds.append(flows[0].cpu().numpy())
             else:
-                idx_fw_flow = [int((model.seq_len - 1)/2 + (model.seq_len - 1) * i) for i in range(args.batch_size)] # just the forward flows
+                idx_fw_flow = [int((model.seq_len - 1)/2 + (model.seq_len - 1) * i) for i in range(bs)] # just the forward flows
+                #print(i, 'inp', inps.shape, 'pred', flows[0].shape, 'gt', data['flow'].shape, 'max idx', np.max(idx_fw_flow))
                 batch_metrics = compute_of_metrics(flows[0][idx_fw_flow], data['flow'])
                 accumulate_metrics(metrics, batch_metrics)
 
