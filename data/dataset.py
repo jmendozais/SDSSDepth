@@ -6,7 +6,7 @@ import glob
 import numpy as np
 import numpy.random as rng
 from skimage import io, transform
-from torchvision.transforms import functional as func
+from torchvision.transforms import functional as VF
 
 from PIL import Image
 import cv2
@@ -151,10 +151,10 @@ class Dataset(data.Dataset):
 
             for i in range(len(snippet)):
                 # Color augmentation. Parameters borrowed from monodepth2
-                snippet[i] = func.adjust_brightness(snippet[i], rnd_brightness)
-                snippet[i] = func.adjust_saturation(snippet[i], rnd_saturation)
-                snippet[i] = func.adjust_contrast(snippet[i], rnd_contrast)
-                snippet[i] = func.adjust_hue(snippet[i], rnd_hue)
+                snippet[i] = VF.adjust_brightness(snippet[i], rnd_brightness)
+                snippet[i] = VF.adjust_saturation(snippet[i], rnd_saturation)
+                snippet[i] = VF.adjust_contrast(snippet[i], rnd_contrast)
+                snippet[i] = VF.adjust_hue(snippet[i], rnd_hue)
 
                 # Random resize crop augmentation. Parameters borrowed from vid2dpeth
                 snippet[i] = snippet[i].resize((rnd_width, rnd_height), resample=2)
@@ -179,25 +179,25 @@ class Dataset(data.Dataset):
 
             for j in range(len(snippet)):
                 tmp = snippet[j].resize(size, resample=2)
-                scaled_snippet.append(func.to_tensor(tmp))
-                scaled_snippet[-1] = func.normalize(scaled_snippet[-1], mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+                scaled_snippet.append(VF.to_tensor(tmp))
+                scaled_snippet[-1] = VF.normalize(scaled_snippet[-1], mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
                 tmp = snippet_noaug[j].resize(size, resample=2)
-                scaled_snippet_noaug.append(func.to_tensor(tmp))
-                scaled_snippet_noaug[-1] = func.normalize(scaled_snippet_noaug[-1], mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+                scaled_snippet_noaug.append(VF.to_tensor(tmp))
+                scaled_snippet_noaug[-1] = VF.normalize(scaled_snippet_noaug[-1], mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
             ms_snippet[i] = torch.stack(scaled_snippet) 
             ms_snippet_noaug[i] = torch.stack(scaled_snippet_noaug) 
 
         for i in range(len(snippet)):
-            snippet[i] = func.to_tensor(snippet[i]) 
-            snippet[i] = func.normalize(snippet[i], mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            snippet[i] = VF.to_tensor(snippet[i]) 
+            snippet[i] = VF.normalize(snippet[i], mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
         ms_snippet[0] = torch.stack(snippet)
 
         for i in range(len(snippet_noaug)):
-            snippet_noaug[i] = func.to_tensor(snippet_noaug[i]) 
-            snippet_noaug[i] = func.normalize(snippet_noaug[i], mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            snippet_noaug[i] = VF.to_tensor(snippet_noaug[i]) 
+            snippet_noaug[i] = VF.normalize(snippet_noaug[i], mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ms_snippet_noaug[0] = torch.stack(snippet_noaug)
 
         # Load depth
@@ -205,14 +205,14 @@ class Dataset(data.Dataset):
             depth = self._get_depth(index)
             depth = cv2.resize(depth, (1242, 375), interpolation=cv2.INTER_NEAREST)
             depth = np.expand_dims(depth, axis=2) 
-            depth = func.to_tensor(depth)
+            depth = VF.to_tensor(depth)
 
             ms_snippet['depth'] = depth
 
         if self.load_flow:
             flow = self._get_flow(index)
             # resize and format
-            flow = func.to_tensor(flow) # [num_src, 2, h, w]
+            flow = VF.to_tensor(flow) # [num_src, 2, h, w]
             ms_snippet['flow'] = flow
         
         total_time = time.perf_counter() - start_all

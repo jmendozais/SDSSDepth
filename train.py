@@ -15,6 +15,7 @@ import torch
 from torch import nn, optim
 import dill
 from tensorboardX import SummaryWriter
+from torchvision.transforms import functional as VF
 
 #import torch.cuda.profiler as profiler
 #import pyprof
@@ -26,6 +27,7 @@ from data import *
 from loss import *
 from log import *
 import util
+from eval.of_utils import *
 
 from pytorch3d import transforms as transforms3D
 
@@ -50,8 +52,12 @@ def compute_loss(model, data, results, rec_mode, rep_cons, num_scales,
     weight_dc, weight_fc, weight_sc, 
     softmin_beta, norm_op, params_qt,
     weight_ec, ec_mode, weight_pl, 
-    log_misc, log_depth, log_flow, 
-    it, epoch, writer):
+    log_misc, 
+    log_depth, 
+    log_flow, 
+    it, 
+    epoch, 
+    writer):
 
     if rep_cons:
         rec_loss, res, err, pooled_err = loss.representation_consistency(results, 
@@ -64,11 +70,11 @@ def compute_loss(model, data, results, rec_mode, rep_cons, num_scales,
                                             rec_mode=rec_mode, 
                                             return_residuals=True)
         if log_depth or log_flow:
-            log_results(writer, seq_len, results, res, err, pooled_err, norm_op, epoch=epoch, log_depth=log_depth, log_flow=log_flow)
+            log_results(writer, seq_len, results, res, err, pooled_err, norm_op, epoch=epoch, log_depth=log_depth, log_flow=log_flow, data=data)
     else:
         rec_loss, rec_terms = loss.baseline_consistency(results, weight_dc, weight_fc, weight_sc, color_nonsmoothness=softmin_beta, rec_mode=rec_mode)
         if log_depth or log_flow:
-            log_results(writer, seq_len, results, res=None, err=None, min_err=None, loss_op=norm_op, epoch=epoch, log_depth=log_depth, log_flow=log_flow)
+            log_results(writer, seq_len, results, res=None, err=None, min_err=None, loss_op=norm_op, epoch=epoch, log_depth=log_depth, log_flow=log_flow, data=data)
 
 
     for j in range(num_scales):
@@ -303,7 +309,6 @@ if __name__ == '__main__':
     start_training = time.perf_counter()
     start = start_training
     val_gt_depths = []
-    val_gt_flows = []
 
     for epoch in range(1, args.epochs + 1):
         start_epoch = time.perf_counter()
@@ -327,8 +332,12 @@ if __name__ == '__main__':
                 args.weight_dc, args.weight_fc, args.weight_sc, 
                 args.softmin_beta, norm_op, args.loss_params_qt,
                 args.weight_ec, args.ec_mode, args.weight_pl, 
-                log_misc=True, log_depth=False, log_flow=False, 
-                it=it, epoch=epoch, writer=writer)
+                log_misc=True, 
+                log_depth=False, 
+                log_flow=False, 
+                it=it, 
+                epoch=epoch, 
+                writer=writer)
 
             batch_loss.backward()
 
@@ -386,6 +395,7 @@ if __name__ == '__main__':
 
         val_pred_depths = []
         val_pred_flows = []
+        of_metrics = {}
 
         for i, data_pair in enumerate(val_loader, 0):
             #print('load val', time.perf_counter() - start)
@@ -413,8 +423,12 @@ if __name__ == '__main__':
                     args.weight_dc, args.weight_fc, args.weight_sc, 
                     args.softmin_beta, norm_op, args.loss_params_qt,
                     args.weight_ec, args.ec_mode, args.weight_pl, 
-                    log_misc=False, log_depth=log_depth_results and i == log_idx, log_flow=log_flow_results and i == log_idx,
-                    it=it, epoch=epoch, writer=writer)
+                    log_misc=False, 
+                    log_depth=log_depth_results and i == log_idx, 
+                    log_flow=log_flow_results and i == log_idx,
+                    it=it, 
+                    epoch=epoch, 
+                    writer=writer)
 
                 # Keeping values for logging at epoch level
 
@@ -427,11 +441,9 @@ if __name__ == '__main__':
                     val_pred_depths.append(results.tgt_depths_pyr[0])
                  
                 if log_flow:
-                    if epoch == 1:
-                        val_gt_flows.append(data['flow'].numpy().transpose((0,2,3,1)))
-
                     idx_fw_flow = [int((seq_len - 1)/2 + (seq_len - 1) * i) for i in range(args.batch_size)] # just the forward flows
-                    val_pred_flows.append(results.ofs_pyr[0][idx_fw_flow].cpu().numpy())
+                    batch_metrics = compute_of_metrics(results.ofs_pyr[0][idx_fw_flow], data['flow'])
+                    accumulate_metrics(of_metrics, batch_metrics)
 
             #print('ops val', time.perf_counter() - start)
             #start = time.perf_counter()
@@ -456,10 +468,13 @@ if __name__ == '__main__':
             metrics += log_depth_metrics(writer, val_gt_depths.numpy(), val_pred_depths.cpu().numpy(), epoch=epoch)
             
         if log_flow:
-            metrics += log_oflow_metrics(writer, val_gt_flows, val_pred_flows, epoch=epoch)
+            for k, v in of_metrics.items():
+                of_metrics[k] = np.mean(v)
+
+            log_of_metrics(writer, of_metrics, epoch=epoch)
+            metrics += [of_metrics]
         
         # Save checkpoint
-
         has_improved = val_loss < best_val_loss - 1e-6
         save_chkp = epoch % args.ckp_freq == 0
 
@@ -475,7 +490,7 @@ if __name__ == '__main__':
         time_metrics = {'epoch' : util.human_time(epoch_time), 'elap':util.human_time(elapsed_time), 'rem': util.human_time(remaining_time), 'tot':util.human_time(expected_training_time)}
         metrics.append(time_metrics)
 
-        print_epoch_stats(epoch, train_loss, val_loss, metrics)
+        print_metric_groups(metrics)
 
     writer.close()
         

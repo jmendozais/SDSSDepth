@@ -246,7 +246,7 @@ elf
 
           tgt_res.depth_pyr: a list of tensors. Each tensor has a batch of depth maps of shape [b, 1, h, w] 
 
-          res.ofs_pyr: a list of tensors. Each tensor has a batch of optical flows for each target, source image pair. res.The flows are stacked around the channel dimmension. It has a shape [b*num_src, 2, h, w]
+          res.ofs_pyr: a list of tensors. Each tensor has a batch of optical flows for each target, source image pair. res.The flows are stacked around the batch dimmension. It has a shape [b*num_src, 2, h, w]
           
           (Deprecated) a list of tensors with the batch of warped outputs at multiple scales. Each tensor has a shape of [2 * b * num_sources, c, h_i, w_i] with the rigid reconstructions from [0..b) and the flow reconstructions from [b..2b)
         '''
@@ -367,14 +367,14 @@ elf
 
             flow_rec, flow_mask = grid_sample(src_imgs, src_pix_coords, return_mask=True)
             flow_rec = flow_rec.view(self.batch_size, self.seq_len - 1, 3, h, w)
-            flow_mask = rigid_mask.view(self.batch_size, self.seq_len - 1, h, w)
+            flow_mask = flow_mask.view(self.batch_size, self.seq_len - 1, h, w)
+            # TODO: append and optical flow occ mask
 
             res.recs_pyr.append(torch.cat([rigid_rec, flow_rec], axis=1))
             res.mask_pyr.append(torch.cat([rigid_mask, flow_mask], axis=1)) 
-            # TODO: change second 
-            # mask by an optical flow based occ mask
 
             # reconstruct with a large
+            # TODO: why?
             if self.loss_noaug:
                 tgt_imgs = F.interpolate(inputs_noaug[i][:,0], size=(h, w), mode='bilinear', align_corners=False)
             else:

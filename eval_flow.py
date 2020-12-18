@@ -14,31 +14,38 @@ bundler_path = "/data/ra153646/datasets/sintel/MPI-Sintel-complete/bundler/linux
 
 import os
 import argparse
+import configargparse 
 import time
 
 import numpy as np
 import torch
 
 import model
-import data
 
-from eval.optical_flow_utils import *
+from eval.of_utils import *
+from data import *
+from log import *
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
+    parser = configargparse.ArgParser()
 
     parser.add_argument('--predict', action='store_true')
 
     parser.add_argument('-c', '--checkpoint')
 
     parser.add_argument('--config-file', is_config_file=True)
-    parser.add_argument('-d', '--dataset-dir', default="/data/ra153646/datasets/sintel/MPI-Sintel-complete")
-    parser.add_argument('-d', '--test-file', default="data/sintel/test-clean.txt")
 
-    parser.add_argument('-o', '--out-dir', default="baseline_of")
+    # Loaded from config file
+    parser.add_argument('--dataset', default='kitti', choices=['kitti', 'sintel', 'tartanair'])
+    parser.add_argument('--dataset-dir', default='/data/ra153646/datasets/KITTI/raw_data')
+    parser.add_argument('--train-file', default='/home/phd/ra153646/robustness/robustdepthflow/data/kitti/train.txt')
+    parser.add_argument('--val-file', default='/home/phd/ra153646/robustness/robustdepthflow/data/kitti/val.txt')
+    parser.add_argument('--test-file', default=None) # just for compatibility with the config file
+    parser.add_argument('--height', type=int, default=-1)
+    parser.add_argument('--width', type=int, default=-1)
 
-    parser.add_argument('--height', type=int, default=128)
-    parser.add_argument('--width', type=int, default=416)
+    parser.add_argument('-e', '--external-eval', action='store_true')
+    parser.add_argument('-o', '--out-dir', default="results")
 
     parser.add_argument('-b', '--batch-size', type=int, default=12)
 
@@ -51,32 +58,60 @@ if __name__ == '__main__':
     num_scales = 4
 
     args = parser.parse_args()
+    print(args)
 
     start = time.perf_counter()
-    if args.predict:
-        checkpoint = torch.load(args.checkpoint)
 
-        model = checkpoint['model']
-        model.to(args.device)
-        model = model.eval()
-        
-        test_set = data.Dataset(args.data_dir, args.clean_file, height=args.height, width=args.width, num_scales=num_scales, seq_len=model.seq_len, is_training=False)
-        test_loader = torch.utils.data.DataLoader(test_set, args.batch_size, shuffle=False, num_workers=args.workers, pin_memory=True, drop_last=False)
+    checkpoint = torch.load(args.checkpoint)
 
-        preds = []
-        for i, data_pair in enumerate(test_loader, 0):
-            with torch.no_grad():    
-                data, data_noaug = data_pair
+    model = checkpoint['model']
 
-                inps = model.prepare_motion_inputs(data) # check seq_len compatibility
+    model.height = args.height
+    model.width = args.width
 
-                outs, _, _, _ = model.motion_net(inps)
-                preds.append(outs[0].cpu().numpy())
+    model.to(args.device)
+    model = model.eval()
+    
+    test_set = create_dataset(args.dataset, args.dataset_dir, args.test_file, height=args.height, width=args.width, 
+        num_scales=num_scales, seq_len=model.seq_len, is_training=False, load_depth=False, load_flow=True)
+    test_loader = torch.utils.data.DataLoader(test_set, args.batch_size, shuffle=False, num_workers=args.workers, pin_memory=True, drop_last=False)
 
+    preds = []
+    metrics = {}
+    for i, data_pair in enumerate(test_loader, 0):
+        with torch.no_grad():    
+            data, data_noaug = data_pair
+            bs, _, _, _, _ = data[0].shape
+
+            for j in range(num_scales):
+                data[j] = data[j].to(args.device)
+                data_noaug[j] = data_noaug[j].to(args.device)
+
+            inps = model.prepare_motion_input(data) # check seq_len compatibility
+
+            flows, _, _ = model.motion_net(inps)
+
+            if args.external_eval:
+                # TODO: Can we store the whole test set on memory?
+                preds.append(flows[0].cpu().numpy())
+            else:
+                idx_fw_flow = [int((model.seq_len - 1)/2 + (model.seq_len - 1) * i) for i in range(bs)] # just the forward flows
+                #print(i, 'inp', inps.shape, 'pred', flows[0].shape, 'gt', data['flow'].shape, 'max idx', np.max(idx_fw_flow))
+                batch_metrics = compute_of_metrics(flows[0][idx_fw_flow], data['flow'])
+                accumulate_metrics(metrics, batch_metrics)
+
+            #if i > 6:
+            #    break
+
+    if args.external_eval:
         preds = np.concatenate(preds, axis=0).squeeze(1)
+    else:
+        for k, v in metrics.items():
+            metrics[k] = np.mean(v)
+        print_metric_groups([metrics])
 
-        save_optical_flows(clean_preds, test_set.files, os.path.join(args.out_dir, 'clean'))
+    #save_optical_flows(clean_preds, test_set.files, os.path.join(args.out_dir, 'clean'))
 
-    print('time: ', time.perf_counter() - start)
+print('time: ', time.perf_counter() - start)
 
 
