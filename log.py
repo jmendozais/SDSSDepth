@@ -9,13 +9,13 @@ import util
 import loss
 from eval import kitti_depth_eval_utils as kitti_utils
 from eval import depth_eval_utils as depth_utils
-from eval import oflow_utils
+from eval import of_utils
 
 # Verbosity levels
 LOG_MINIMAL = 0
 LOG_STANDARD = 1
 
-def log_results(writer, seq_len, results, res, err, min_err, loss_op, epoch, log_depth=True, log_flow=True):
+def log_results(writer, seq_len, results, res, err, min_err, loss_op, epoch, log_depth=True, log_flow=True, data=None):
     batch_size = results.tgt_imgs_pyr[0].size(0)
     cols = min(batch_size, 4)
 
@@ -39,13 +39,21 @@ def log_results(writer, seq_len, results, res, err, min_err, loss_op, epoch, log
         rigid_mask = mask_t[:seq_len-1,:cols].reshape(-1, 1, h, w)
         rigid_mask_grid = make_grid(rigid_mask, nrow=cols)
 
-        writer.add_image('depths', depths_grid, epoch)
+        writer.add_image('depths_pred', depths_grid, epoch)
         writer.add_image('rigid_rec', rigid_rec_grid, epoch)
         writer.add_image('rigid_mask', rigid_mask_grid, epoch)
 
     if log_flow:
-        of_colors = util.optical_flow_to_rgb(results.ofs_pyr[0][:cols*2]) 
-        flows_grid = make_grid(of_colors, nrow=cols)
+        idx = [2*i for i in range(cols)] + [2*i + 1 for i in range(cols)]
+        flows_color = util.optical_flow_to_rgb(results.ofs_pyr[0][idx]) 
+        flows_grid = make_grid(flows_color, nrow=cols)
+
+        _, _, gt_h, gt_w = data['flow'].shape
+        flows_gt = of_utils.resize_like_gpu(data['flow'][:cols], results.ofs_pyr[0])
+        flows_gt[:,0,:,:] *= (w-1)/(gt_w-1)
+        flows_gt[:,1,:,:] *= (h-1)/(gt_h-1)
+        flows_gt_color = util.optical_flow_to_rgb(flows_gt) 
+        flows_gt_grid = make_grid(flows_gt_color, nrow=cols)
 
         flow_rec = util.denormalize(rec_t[seq_len-1:,:cols].reshape(-1, 3, h, w))
         flow_rec_grid = make_grid(flow_rec, nrow=cols) 
@@ -54,6 +62,7 @@ def log_results(writer, seq_len, results, res, err, min_err, loss_op, epoch, log
         flow_mask_grid = make_grid(flow_mask, nrow=cols)
                  
         writer.add_image('flows', flows_grid, epoch)
+        writer.add_image('flows_gt', flows_gt_grid, epoch)
         writer.add_image('flow_rec', flow_rec_grid, epoch)
         writer.add_image('flow_mask', flow_mask_grid, epoch)
 
@@ -214,13 +223,17 @@ def log_depth_metrics(writer, gt_depths, pred_depths, min_depth=1e-3, max_depth=
     return [error_metrics1, acc_metrics1, error_metrics2, acc_metrics2]
 
 
-def log_oflow_metrics(writer, gt_flows, pred_flows, epoch):
+def log_of_metrics_cpu(writer, gt_flows, pred_flows, epoch):
     metrics = oflow_utils.compute_metrics(pred_flows, gt_flows)
 
     for k, v in metrics.items():
         writer.add_scalar('oflow/' + k, v, epoch)
 
     return [metrics]
+
+def log_of_metrics(writer, metrics, epoch):
+    for k, v in metrics.items():
+        writer.add_scalar('oflow/' + k, v, epoch)
 
 def log_model_sanity_checks(writer, model, it):
     writer.add_histogram('dn conv1 weight grads', model.depth_net.enc.net._conv_stem.weight.grad.cpu().numpy(), it)
@@ -238,8 +251,7 @@ def log_params(writer, modules, it):
             if parameter.grad != None:
                 writer.add_histogram(name+"_grad", parameter.grad.cpu().numpy(), it)            
 
-def print_epoch_stats(epoch, train_loss, val_loss, metric_groups):
-    #out = "Ep {}, tr loss {:.4f}, val loss {:.4f}, ".format(epoch, train_loss, val_loss)
+def print_metric_groups(metric_groups):
     out = ""
     for metrics in metric_groups:
         for k in metrics.keys():

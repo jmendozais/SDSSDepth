@@ -87,7 +87,8 @@ CUDA_VISIBLE_DEVICES=$dev python $(pwd)/eval_depth.py -c ${DATADIR}/$ename/best_
 
 flow() {
 dev=0
-ename=debug-flow-tartan
+ename=flowtest
+
 # Kitti
 #CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename-kitti --loss l1 --flow-sm-alpha 150 --weight-ds 0 -b 4 --epoch 15 -l 5e-5 --rec-mode flow --rep-cons --softmin-beta 0 --norm bn --weight-ofs 1e-2 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --debug-training --verbose 0
 
@@ -104,7 +105,11 @@ ename=debug-flow-tartan
 
 #CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename-tartan --loss l1 --flow-sm-alpha 150 --config-file $(pwd)/misc/tartanair.cfg --weight-ds 0 -b 4 --epoch 15 -l 5e-5 --rec-mode flow --rep-cons --softmin-beta 0 --norm bn --weight-ofs 1e-2 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --debug-training --verbose 0
 #echo CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename-tartan --loss l1 --flow-sm-alpha 150 --config-file $(pwd)/misc/tartanair.cfg --weight-ds 0 -b 4 --epoch 15 -l 5e-5 --rec-mode flow --rep-cons --softmin-beta 0 --norm bn --weight-ofs 1e-2 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --debug-training --verbose 0
-CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename-tartan --loss l1 --flow-sm-alpha 150 --config-file $(pwd)/misc/tartanair.cfg --stack-flows --multi-flow --weight-ds 0 -b 8 --epoch 15 -l 1e-5 --rec-mode flow --rep-cons --softmin-beta 0 --norm bn --weight-ofs 1e-2 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --debug-training --workers 0 --height 224 --width 416
+#CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --log ${DATADIR}/$ename-tartan --loss l1 --flow-sm-alpha 150 --config-file $(pwd)/misc/tartanair.cfg --stack-flows --multi-flow --weight-ds 0 -b 4 --epoch 15 -l 1e-5 --rec-mode flow --rep-cons --softmin-beta 0 --norm bn --weight-ofs 1e-2 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --debug-training --workers 0 --height 224 --width 416
+#CUDA_VISIBLE_DEVICES=$dev python $(pwd)/eval_flow.py -c ${DATADIR}/$ename/best_model_val.tar --config-file $(pwd)/misc/tartanair.cfg 
+
+CUDA_VISIBLE_DEVICES=$dev python -u $(pwd)/train.py --loss l1 --weight-ds 0 --weight-ofs 2 --flow-sm-alpha 150 --stack-flows --multi-flow -b 12 --epoch 15 -l 1e-4 --rec-mode flow --rep-cons --softmin-beta 0 --weight-ec 0 --weight-dc 0 --weight-fc 0 --weight-sc 0 --weight-pl 0 --log ${DATADIR}/$ename --config-file $(pwd)/misc/tartanair.cfg --debug-training
+CUDA_VISIBLE_DEVICES=$dev python $(pwd)/eval_flow.py -c ${DATADIR}/$ename/best_model_val.tar --config-file $(pwd)/misc/tartanair.cfg
 
 #echo "$train_clean;$train_final"
 #CUDA_VISIBLE_DEVICES=$dev python $(pwd)/eval_depth.py -c ${DATADIR}/$ename/best_model_val.tar -i $(pwd)/data/kitti/test_files_eigen.txt --single-scalor --predict --measure 
