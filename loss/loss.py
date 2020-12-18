@@ -229,6 +229,8 @@ def representation_consistency(
                 extra = results.extra_out_pyr[i][:,:(num_recs//2),:,:,:]
             elif rec_mode == 'flow': 
                 extra = results.extra_out_pyr[i][:,(num_recs//2):,:,:,:]
+            else:
+                extra = results.extra_out_pyr[i]
 
             if params_qt > 0.0:
                 bs, nr, _, _, _ = extra.shape
@@ -238,6 +240,8 @@ def representation_consistency(
                     results.extra_out_pyr[i][:,:(num_recs//2),:,:,:] = extra
                 elif rec_mode == 'flow': 
                     results.extra_out_pyr[i][:,(num_recs//2):,:,:,:] = extra
+                else:
+                    results.extra_out_pyr[i] = extra
             
             err = norm(res, extra)
         else:
