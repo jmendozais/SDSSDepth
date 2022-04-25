@@ -19,14 +19,6 @@ from efficientnet_pytorch.utils import (
     MemoryEfficientSwish,
 )
 
-from pycls.core.config import cfg
-import pycls.core.config as config
-import pycls.core.builders as builders
-import pycls.core.checkpoint as checkpoint
-
-from pycls.models.regnet import RegNet
-from pycls.models.anynet import get_stem_fun
-
 from util import *
 from normalization import *
 from net.base_net import *
@@ -34,77 +26,121 @@ from net.base_net import *
 MIN_DEPTH = 0.1
 MAX_DEPTH = 100.0
 
-class DepthNet(nn.Module):
 
-    def __init__(self, pretrained=True, norm='bn', height=-1, width=-1, num_ext_channels=0, backbone='regnet', dropout=0.0, pred_disp=False):
-        '''
+class DepthNet(nn.Module):
+    def __init__(
+        self,
+        pretrained=True,
+        norm="bn",
+        height=-1,
+        width=-1,
+        num_ext_channels=0,
+        ext_type="pixelwise",
+        backbone="regnet",
+        dropout=0.0,
+        dec_dropout=0.0,
+        out_mode="disp",
+        feats_mode="dec",
+    ):
+        """
         loss_params: number of parameter per pixel
-        '''
+        """
         super(DepthNet, self).__init__()
         self.num_ext_channels = num_ext_channels
+        self.ext_type = ext_type
         self.backbone = backbone
         self.dropout = dropout
-        self.pred_disp = pred_disp
+        self.out_mode = out_mode
+        self.feats_mode = feats_mode
 
-        if backbone == 'regnet':
-            self.enc = MultiInputRegNetEncoder(num_inputs=1, pretrained=pretrained, norm=norm, height=height, width=width)
-        elif backbone == 'resnet':
+        if backbone == "resnet":
             self.enc = MultiInputResNetEncoder(num_inputs=1, pretrained=pretrained)
-        elif backbone == 'effnet':
-            self.enc = MultiInputEfficientNetEncoder(num_inputs=1, pretrained=pretrained)
+        elif backbone == "effnet":
+            self.enc = MultiInputEfficientNetEncoder(
+                num_inputs=1, pretrained=pretrained
+            )
         else:
             raise NotImplementedError("Backbone {} not defined.".format(backbone))
 
-        '''
-        Activation functions and depth range. Current implementations use sigmoid activations and bound depth values in a range (i.e. monodepth2 0.1 - 100). 
-        Activation scaling. Most depth estimation network scale the disp outputs by a factor (numerical stability)
-        TODO: If softplus without bounding outputs and scaling do not work, try softplus + scaling or sigmoid + scaling + bounding (it should work, depth-in-theworld paper)
-        ''' 
-        # TODO: 
-        self.dec = CustomDecoder(self.enc.num_ch_skipt, num_ch_out=1 + num_ext_channels)
+        self.dec = CustomDecoder(
+            self.enc.num_ch_skipt, num_ch_out=1 + num_ext_channels, dropout=dec_dropout
+        )
 
     def forward(self, inputs):
-        '''
+        """
         Returns:
-            depths: A list of tensors with the depth maps at multiple-scales. Each tensor has as shape [bs*seq_len, 1, h, w]
-            extra: A list of tensors with the extra values predicted for each pixel. Each tensor has a shape [bs*seq_len, num_parms, h, w]
-            enc_feats: A list ofothe feature maps of the depth encoder
-        '''
+            depths: A list of tensors with the depth maps at multiple-scales.
+                Each tensor has as shape [bs*seq_len, 1, h, w]
+            extra: A list of tensors with the extra values predicted for each pixel.
+                Each tensor has a shape [bs*seq_len, num_parms, h, w]
+            enc_feats: A list of other feature maps of the depth encoder
+        """
         enc_feats = self.enc(inputs)
 
         if self.dropout > 1e-6:
-            enc_feats[-1] = F.dropout(enc_feats[-1], p=self.dropout, training=self.training)
+            enc_feats[-1] = F.dropout(
+                enc_feats[-1], p=self.dropout, training=self.training
+            )
 
-        outs = self.dec(enc_feats)
+        outs, dec_feats = self.dec(enc_feats)
 
-        depths = []
-        disps = []
+        preds = []
         extra = []
         for i in range(len(outs)):
-            if self.num_ext_channels:
-                if self.pred_disp:
-                    acts = F.sigmoid(outs[i][:,:1,:,:])
-                    disp, depth = sigmoid_to_disp_depth(acts, MIN_DEPTH, MAX_DEPTH)
-                else:
-                    depth = F.softplus(outs[i][:,:1,:,:]) + 1e-6
-                    disp = 1.0 / depth
+            if self.out_mode == "disp":
+                acts = torch.sigmoid(outs[i][:, :1, :, :])
+                min_disp = 1 / MAX_DEPTH
+                max_disp = 1 / MIN_DEPTH
+                pred = min_disp + (max_disp - min_disp) * acts
 
-                depths.append(depth)
-                disps.append(disp)
-                extra.append(outs[i][:,1:,:,:])
+            elif self.out_mode == "depth-bounded":
+                acts = torch.sigmoid(outs[i][:, :1, :, :] * 0.01)
+                pred = MIN_DEPTH + (MAX_DEPTH - MIN_DEPTH) * acts
+
+            # Remove
+            elif self.out_mode == "depth-bounded-v2":
+                pred = torch.sigmoid(outs[i][:, :1, :, :] * 0.01)
+
+            elif self.out_mode == "depth-bounded-v3":
+                pred = torch.sigmoid(outs[i][:, :1, :, :])
+
+            # Remove
+            elif self.out_mode == "depth-bounded-v4":
+                acts = torch.sigmoid(outs[i][:, :1, :, :])
+                pred = 1e-4 + acts
+
+            elif self.out_mode == "depth-unbounded":
+                # depth = F.softplus(outs[i])
+                pred = F.softplus(outs[i][:, :1, :, :] * 0.01)
 
             else:
-                if self.pred_disp:
-                    acts = F.sigmoid(outs[i])
-                    disp, depth = sigmoid_to_disp_depth(acts, MIN_DEPTH, MAX_DEPTH)
+                raise NotImplementedError(
+                    "out_mode {} not implemented".format(self.out_mode)
+                )
 
-                    depths.append(depth)
-                    disps.append(disp)
-                else:
-                    depths.append(F.softplus(outs[i]) + 1e-6)
-                    disps.append(1.0 / depths[-1])
-        
-        if self.num_ext_channels:
-            return depths, disps, extra, enc_feats
+            preds.append(pred)
+
+            if self.ext_type == "pixelwise":
+                extra.append(outs[i][:, 1:, :, :])
+            else:
+                _, _, h, w = outs[i].shape
+                extra.append(F.avg_pool2d(outs[i][:, 1:, :, :], kernel_size=(h, w)))
+
+        if self.feats_mode == "enc":
+            feats = [None] + enc_feats  # enc-feats[0] is at h/2 x w/2
+
+        elif self.feats_mode == "dec":
+            feats = dec_feats  # dec_feats[0] is at hxw
+
+        elif self.feats_mode == "all":
+            feats = [dec_feats[0]]
+            for i in range(1, len(outs)):
+                feats.append(torch.cat((enc_feats[i - 1], dec_feats[i]), dim=1))
         else:
-            return depths, disps, enc_feats
+            raise NotImplementedError("fc mode '" + self.fc_mode + "' not implemented")
+
+        if self.num_ext_channels:
+            return preds, extra, feats
+
+        else:
+            return preds, None, feats

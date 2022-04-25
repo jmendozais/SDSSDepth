@@ -1,10 +1,11 @@
 from absl.testing import absltest
-import numpy as np
 
+import numpy as np
 import torch
 import torch.nn
 
-from net.base_net import *
+from net.flow_net import UFlowEncoder, UFlowDecoder
+
 
 class BaseNetTest(absltest.TestCase):
 
@@ -27,7 +28,7 @@ class BaseNetTest(absltest.TestCase):
 
         assert h_in == 4 * h and w_in == 4 * w
 
-    def test_uflownet_same_resolution(self):#
+    def test_uflownet_same_resolution(self):
         encoder = UFlowEncoder()
         decoder = UFlowDecoder(same_resolution=True)
 
@@ -42,7 +43,7 @@ class BaseNetTest(absltest.TestCase):
 
         assert h_in == h and w_in == w
 
-    def test_uflownet_extra_channels(self):#
+    def test_uflownet_extra_channels(self):
         encoder = UFlowEncoder()
         decoder = UFlowDecoder(same_resolution=True, num_ch_out=3)
 
@@ -56,6 +57,7 @@ class BaseNetTest(absltest.TestCase):
         _, _, h, w = flow_pyr[0].shape
 
         assert h_in == h and w_in == w
+
 
 if __name__ == '__main__':
     absltest.main()

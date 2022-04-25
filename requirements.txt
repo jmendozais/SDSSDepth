@@ -1,5 +1,5 @@
 youtube-dl
-torch
+torch==1.8.1
 torchvision
 pytorch3d
 dill
@@ -7,4 +7,4 @@ tensorboardX
 pyturbojpeg
 efficientnet-pytorch
 configargparse
-lpips
+kornia

@@ -1,109 +1,124 @@
-# Adapted from https://github.com/tinghuiz/SfMLearner/blob/master/kitti_eval/eval_depth.py 
+# Adapted from
+# https://github.com/tinghuiz/SfMLearner/blob/master/kitti_eval/eval_depth.py
 
 import os
-import argparse
 import time
+
+import argparse
+import configargparse
 
 import numpy as np
 import torch
 
 import model
 import data
-
+from data import transform as DT
+from data import create_dataset
 from eval.kitti_depth_eval_utils import *
 from eval.depth_eval_utils import *
+import opts
+import util
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
 
-    parser.add_argument('--predict', action='store_true')
-    parser.add_argument('--measure', action='store_true')
-    parser.add_argument('--single-scalor', action='store_true')
-    # TODO: save and load predictions elementwise when the test set is too large
-    parser.add_argument('--elementwise', action='store_true')
+def eval_depth(model, test_loader, args):
+    preds = []
+    depth_metrics = dict()
 
-    parser.add_argument('-c', '--checkpoint')
-    parser.add_argument('-i', '--input-file', default="data/kitti/test_files_eigen.txt")
-    parser.add_argument('-p', '--pred-file', default=None)
-    parser.add_argument('-g', '--gt-file', default="/data/ra153646/robustness/eval/kitti_depth_gt.npy")
-    parser.add_argument('-d', '--data-dir', default="/data/ra153646/datasets/KITTI/raw_data")
+    for i, data in enumerate(test_loader, 0):
+        with torch.no_grad():
+            # [b, sl, 3, h, w] dim[1] = {tgt, src, src ...}
+            data['color'] = data['color'].to(args.device)
+            data = DT.normalize(data)
+            depths_or_disp_pyr, _, _ = model.depth_net(
+                data['color'][:, 0])  # just for tgt images
+            if model.depthnet_out == 'disp':
+                depths = 1 / depths_or_disp_pyr[0]
+            else:
+                depths = depths_or_disp_pyr[0]
 
-    parser.add_argument('--height', type=int, default=128)
-    parser.add_argument('--width', type=int, default=416)
+            if args.batchwise:
+                batch_metrics = compute_metrics_batch(depths, data['depth'].to(
+                    args.device), min_depth=args.min_depth, crop_eigen=args.crop_eigen)
+                util.accumulate_metrics(depth_metrics, batch_metrics)
+            else:
+                preds.append(depths[0].cpu().numpy())
 
-    parser.add_argument('-b', '--batch-size', type=int, default=12)
+    if args.batchwise:
+        for k, v in depth_metrics.items():
+            depth_metrics[k] = np.mean(v)
 
-    parser.add_argument('--min_depth', type=float, default=1e-3, help="Threshold for minimum depth")
-    parser.add_argument('--max_depth', type=float, default=80, help="Threshold for maximum depth")
-
-    parser.add_argument('--workers', type=int, default=4)
-
-    parser.add_argument('--device', default='cuda')
-
-    seq_len = 1
-    num_scales = 4
-
-    args = parser.parse_args()
-
-    start = time.perf_counter()
-
-    if args.predict:
-        checkpoint = torch.load(args.checkpoint)
-
-        model = checkpoint['model']
-        model.to(args.device)
-        model.eval()
-        
-        test_set = data.Dataset(args.data_dir, args.input_file, height=args.height, width=args.width, num_scales=num_scales, seq_len=seq_len, is_training=False)
-        test_loader = torch.utils.data.DataLoader(test_set, args.batch_size, shuffle=False, num_workers=args.workers, pin_memory=True, drop_last=False)
-
-        preds = []
-        for i, data_pair in enumerate(test_loader, 0):
-            with torch.no_grad():    
-                data, data_noaug = data_pair
-                inp = data[0].to(args.device)
-                outs = model.depth_net(inp[:,0])
-                depth = outs[0]
-                preds.append(depth[0].cpu().numpy())
+        print("Ambiguous scale factor (batchwise)")
+        print(' '.join([k for k in depth_metrics.keys()]))
+        print(' '.join(['{:.4f}'.format(depth_metrics[k])
+              for k in depth_metrics.keys()]))
+    else:
+        assert len(test_loader) == len(preds)
+        assert args.gt_file is not None
 
         preds = np.concatenate(preds, axis=0).squeeze(1)
-        
-        if args.pred_file == None:
-            idx = args.checkpoint.rfind('.')
-            assert idx != -1
-            args.pred_file = args.checkpoint[:idx] + '.npy'
-            np.save(args.pred_file, preds)
 
-    if args.measure:
-        gt_depths = np.load(args.gt_file, allow_pickle=True)
-        pred_depths = np.load(args.pred_file, allow_pickle=True)
+        gt = np.load(args.gt_file, allow_pickle=True)
 
-        test_files = read_text_lines(args.input_file)
-        gt_files, gt_calib, im_sizes, im_files, cams = \
-            read_file_data(test_files, args.data_dir)
+        preds = resize_like(preds, gt)
 
-        num_test = len(im_files)
-        assert len(pred_depths) == num_test
-
-        pred_depths = resize_like(pred_depths, gt_depths)
-
-        if args.single_scalor:
-            scale_factor = compute_scale_factor(pred_depths, gt_depths, args.min_depth, args.max_depth)
-            metrics = compute_metrics(pred_depths, gt_depths, args.min_depth, args.max_depth, scale_factor)
-
-            print("Consistent scale factor")
-            print(' '.join([k for k in metrics.keys()]))
-            print(' '.join(['{:.4f}'.format(metrics[k]) for k in metrics.keys()]))
-
-        metrics = compute_metrics(pred_depths, gt_depths, args.min_depth, args.max_depth)
+        metrics = compute_metrics(
+            preds, gt, args.min_depth, args.max_depth, crop_eigen=args.crop_eigen)
 
         print("Ambiguous scale factor")
         print(' '.join([k for k in metrics.keys()]))
         print(' '.join(['{:.4f}'.format(metrics[k]) for k in metrics.keys()]))
 
-        #for metric, value in metrics.items():
-        #    print('{} : {:.4f}'.format(metric, value))
+        if args.single_scalor:
+            scale_factor = compute_scale_factor(
+                preds, gt, args.min_depth, args.max_depth)
+            metrics = compute_metrics(
+                preds, gt, args.min_depth, args.max_depth, scale_factor, crop_eigen=args.crop_eigen)
+
+            print("Consistent scale factor")
+            print(' '.join([k for k in metrics.keys()]))
+            print(' '.join(['{:.4f}'.format(metrics[k])
+                  for k in metrics.keys()]))
 
     print('time: ', time.perf_counter() - start)
 
 
+if __name__ == '__main__':
+    seq_len = 1
+
+    args = opts.parse_args()
+    print(args)
+
+    start = time.perf_counter()
+
+    test_set = create_dataset(args.dataset,
+                              args.dataset_dir,
+                              args.test_file,
+                              height=args.height,
+                              width=args.width,
+                              num_scales=args.num_scales,
+                              seq_len=args.seq_len,
+                              load_depth=args.batchwise,
+                              is_training=False)
+
+    test_loader = torch.utils.data.DataLoader(test_set,
+                                              args.batch_size,
+                                              shuffle=False,
+                                              num_workers=args.workers,
+                                              pin_memory=True,
+                                              drop_last=False)
+
+    checkpoint = torch.load(args.checkpoint)
+    model = checkpoint['model']
+    model.to(args.device)
+    model.eval()
+
+    print("Student")
+    eval_depth(model, test_loader, args)
+
+    if 'teacher' in checkpoint.keys():
+        teacher = checkpoint['teacher'].ema_model
+        teacher.to(args.device)
+        teacher.eval()
+
+        print("Teacher")
+        eval_depth(teacher, test_loader, args)

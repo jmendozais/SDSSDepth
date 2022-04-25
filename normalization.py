@@ -1,10 +1,10 @@
+import numpy as np
 import torch
 from torch import nn, Tensor, Size
 
 from typing import Union, List
 
 _shape_t = Union[int, List[int], Size]
-import numpy as np
 
 
 def parameterized_truncated_normal(uniform, mu, sigma, a, b):
@@ -24,11 +24,15 @@ def parameterized_truncated_normal(uniform, mu, sigma, a, b):
 
     return x
 
+
 def truncated_normal(uniform):
-    return parameterized_truncated_normal(uniform, mu=0.0, sigma=1.0, a=-2, b=2)
+    return parameterized_truncated_normal(
+        uniform, mu=0.0, sigma=1.0, a=-2, b=2)
+
 
 def sample_truncated_normal(shape=()):
     return truncated_normal(torch.from_numpy(np.random.uniform(0, 1, shape)))
+
 
 class Identity(nn.Module):
     def __init__(self, *args, **kwargs):
@@ -37,9 +41,11 @@ class Identity(nn.Module):
     def forward(self, x):
         return x
 
+
 class RandomLayerNorm(nn.Module):
 
-    def __init__(self, noise_std: float = 0.5, eps: float = 1e-5, elementwise_affine: bool = True)  -> None:
+    def __init__(self, noise_std: float = 0.5, eps: float = 1e-5,
+                 elementwise_affine: bool = True) -> None:
         super(RandomLayerNorm, self).__init__()
         self.elementwise_affine = elementwise_affine
         self.register_parameter('weight', None)
@@ -54,17 +60,23 @@ class RandomLayerNorm(nn.Module):
             nn.init.zeros_(self.bias)
 
     def forward(self, x):
-        if self.normalized_shape == None:
+        if self.normalized_shape is None:
             self.normalized_shape = (1,) + x.shape[1:]
-            self.weight = nn.Parameter(torch.ones(*self.normalized_shape).to(x.device))
-            self.bias = nn.Parameter(torch.zeros(*self.normalized_shape).to(x.device))
+            self.weight = nn.Parameter(torch.ones(
+                *self.normalized_shape).to(x.device))
+            self.bias = nn.Parameter(torch.zeros(
+                *self.normalized_shape).to(x.device))
 
-        var, mean = torch.var_mean(x, [2,3], keepdim=True)
+        var, mean = torch.var_mean(x, [2, 3], keepdim=True)
         if self.training:
-            mean = mean * (1.0 + sample_truncated_normal(mean.shape).to(x.device) * self.noise_std).detach()
-            var = var * (1.0 + sample_truncated_normal(var.shape).to(x.device) * self.noise_std).detach()
+            mean = mean * \
+                (1.0 + sample_truncated_normal(mean.shape).to(x.device)
+                 * self.noise_std).detach()
+            var = var * \
+                (1.0 + sample_truncated_normal(var.shape).to(x.device)
+                 * self.noise_std).detach()
 
         b, c, h, w = var.size()
-        x_norm = (x - mean)/(torch.sqrt(var) + 1e-6)
+        x_norm = (x - mean) / (torch.sqrt(var) + 1e-6)
         res = x_norm * self.weight + self.bias
         return res

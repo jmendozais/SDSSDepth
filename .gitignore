@@ -1,6 +1,21 @@
 data/moving_exp/sample/
 runs/
 log/
+exp/
+
+eval_make3d.py
+
+misc/waymo-tiny.cfg
+misc/kitti_small_v4.cfg
+misc/test_data_out/
+misc/debug/
+misc/val_debug/
+misc/*.tar
+
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/
+*/**/.ipynb_checkpoints/
+.vscode/settings.json
 
 */*.pyc
 */*.so*

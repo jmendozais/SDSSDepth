@@ -8,7 +8,10 @@ import glob
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("-d", "--data-dir", default='/data/ra153646/datasets/sintel/MPI-Sintel-complete')
+    parser.add_argument(
+        "-d",
+        "--data-dir",
+        default='/data/ra153646/datasets/sintel/MPI-Sintel-complete')
     parser.add_argument("-o", "--out-dir")
     parser.add_argument("-p", "--proportion", type=int, default=0.80)
 
@@ -30,7 +33,7 @@ if __name__ == "__main__":
         if tokens[-2] not in clips.keys():
             clips[tokens[-2]] = []
         clips[tokens[-2]].append(path)
-    
+
     keys = clips.keys()
     num_train_clips = int(len(keys) * args.proportion)
 
