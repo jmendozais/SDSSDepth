@@ -2,16 +2,16 @@
 
 [comment]: <> (TODO: Add a demo image)
 
-SDSSDepth is a codebase that implements the paper **Self-Distilled Self-Supervised Depth Estimation in Monocular Videos** that will be published at <a link="https://icprai2022.sciencesconf.org/"> 	
-ICPRAI 2022 </a>. Also, we hope this codebase could support future research in self-supervised monocular depth estimation and beyond. 
+SDSSDepth is a codebase that implements the paper **Self-Distilled Self-Supervised Depth Estimation in Monocular Videos** that will be published at [ICPRAI](https://icprai2022.sciencesconf.org/)
+. Also, we hope this codebase could support future research in self-supervised monocular depth estimation and beyond. 
 
 ## Getting Started 
 
-Please see <a link="">Getting Started</a> for guidelines to install and test SDSSDepth. 
+Please see [Getting Started](https://github.com/jmendozais/SDSSDepth/blob/master/GETTING_STARTED.md) for guidelines to install and test SDSSDepth. 
 
 ## License 
 
-SDSSDepth is released under the <a link="https://github.com/jmendozais/SDSSDepth/blob/main/LICENSE">MIT License</a>.
+SDSSDepth is released under the [MIT License](https://github.com/jmendozais/SDSSDepth/blob/main/LICENSE).
 
 ## Citing SDSSDepth
 If you find SDSSDepth useful for your research, please consider citing the following paper:
@@ -26,7 +26,7 @@ If you find SDSSDepth useful for your research, please consider citing the follo
 }
 ```
 
-Also, this codebase implements the paper **Adaptive Self-Supervised Depth Estimation in Monocular Videos**:
+Also, this codebase implements the paper [**Adaptive Self-Supervised Depth Estimation in Monocular Videos**](https://link.springer.com/chapter/10.1007/978-3-030-87361-5_56):
 
 ```BibTeX
 @inproceedings{mendoza2021adaptive,
