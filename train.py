@@ -1,7 +1,3 @@
-""" Validation. We perform validation without looking to the depth results for simplicity. We use validation loss for model selection.
-
-TODO: After obtaining results we can implement a validation procedure with depth maps to check if the validation loss have the same behaviour as the depth metrics with video wise depth map normalization.
-"""
 import os
 import time
 import random

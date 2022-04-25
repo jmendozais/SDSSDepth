@@ -1,11 +1,3 @@
-'''
-input_dir
-output_dir
-ckp
-width
-height
-'''
-
 import os
 import argparse
 import configargparse
