@@ -18,7 +18,7 @@ If you find SDSSDepth useful for your research, please consider citing the follo
 
 ```BibTeX
 @inproceedings{mendoza2022self,
-	title        = {{Self-Supervised Self-Distilled Monoculer Depth Estimation}},
+	title        = {{Self-Distilled Self-Supervised Monoculer Depth Estimation}},
 	author       = {Mendoza, Julio and Pedrini, Helio},
 	year         = 2022,
 	booktitle    = {International Conference on Pattern Recognition and Artificial Intelligence},
