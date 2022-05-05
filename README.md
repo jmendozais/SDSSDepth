@@ -11,7 +11,7 @@ Please see [Getting Started](https://github.com/jmendozais/SDSSDepth/blob/master
 
 ## License 
 
-SDSSDepth is released under the [MIT License](https://github.com/jmendozais/SDSSDepth/blob/main/LICENSE).
+SDSSDepth is released under the [MIT License](https://github.com/jmendozais/SDSSDepth/blob/master/LICENSE).
 
 ## Citing SDSSDepth
 If you find SDSSDepth useful for your research, please consider citing the following paper:
